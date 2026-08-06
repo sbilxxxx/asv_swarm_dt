@@ -95,6 +95,8 @@ function createWakeTexture() {
  * センサーカメラ（camera_sensor.js）の距離定数もこの値に揃えて調整すること。
  */
 export const SHIP_VISUAL_SCALE = 2.2;
+/** 船の基準点（グループ原点）の水面からの高さ。ブリッジカメラの基準にも使う。 */
+export const SHIP_DECK_HEIGHT = 1.1 * SHIP_VISUAL_SCALE;
 
 /** 船体形状（Yを船首方向とするローカル座標）。cone時代の外部回転規約（rotation.x=90°→rotation.zで艏首方位）を踏襲する。 */
 function buildHullGeometry() {
@@ -239,6 +241,18 @@ export function buildThreeScene(canvas, scene, options = {}) {
     deck.castShadow = true;
     group.add(deck);
 
+    // センサーマスト＋ドーム: ASVが観測機器を積んでいることを示す装飾（レーダー/カメラの実体ではない）
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0xd7dede, roughness: 0.5 });
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * s, 0.08 * s, 1.0 * s, 6), mastMat);
+    mast.position.set(0, 1.5 * s, -0.8 * s);
+    group.add(mast);
+    const sensorDome = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22 * s, 10, 6, 0, Math.PI * 2, 0, Math.PI / 1.7),
+      new THREE.MeshStandardMaterial({ color: 0xf2f5f5, roughness: 0.3 })
+    );
+    sensorDome.position.set(0, 2.0 * s, -0.8 * s);
+    group.add(sensorDome);
+
     // 航海灯: 遠距離でも視認できる小さな発光点（実際の航海灯の役割も兼ねる）
     const navLight = new THREE.Mesh(
       new THREE.SphereGeometry(0.35 * s, 8, 8),
@@ -247,13 +261,16 @@ export function buildThreeScene(canvas, scene, options = {}) {
     navLight.position.set(0, 1.3 * s, -0.8 * s);
     group.add(navLight);
 
+    // 加算合成で「光る航跡」にする（参考にした操船シミュレータのwakeスプライトと同じ狙い）
     const wakeMat = new THREE.MeshBasicMaterial({
       map: wakeTexture,
+      color: 0xeaffff,
       transparent: true,
       opacity: 0,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
-    const wake = new THREE.Mesh(new THREE.PlaneGeometry(2.6 * s, 11 * s), wakeMat);
+    const wake = new THREE.Mesh(new THREE.PlaneGeometry(3.2 * s, 14 * s), wakeMat);
     wake.rotation.x = -Math.PI / 2;
     wake.position.set(0, 0.05 * s, -8.5 * s);
     group.add(wake);
@@ -270,7 +287,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
       const { group, wakeMat } = ensureShip(e.id, e.faction);
       group.position.set(e.x, 1.1 * SHIP_VISUAL_SCALE, -e.y);
       group.rotation.z = -e.heading;
-      wakeMat.opacity = THREE.MathUtils.clamp((e.speed ?? 0) / 6, 0, 1) * 0.55;
+      wakeMat.opacity = THREE.MathUtils.clamp((e.speed ?? 0) / 6, 0, 1) * 0.85;
     }
   }
 

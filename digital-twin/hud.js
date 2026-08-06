@@ -8,26 +8,101 @@ export function renderCameraPanel(reading) {
   const el = document.getElementById('camera-readout');
   if (!el) return;
   if (reading?.imageDataUrl) {
-    el.innerHTML = `<img src="${reading.imageDataUrl}" alt="onboard camera" />`;
+    el.innerHTML = `<img src="${reading.imageDataUrl}" alt="bridge camera" />`;
   } else {
     el.textContent = '(取得待ち)';
   }
 }
 
-export function renderRadarPanel(reading) {
-  const el = document.getElementById('radar-readout');
-  if (!el) return;
-  if (!reading) {
-    el.textContent = '—';
-    return;
+let sweepAngle = 0;
+
+/**
+ * 円形のレーダースコープを描画する（ヘディングアップ表示: 画面上＝自艇の船首方向）。
+ * @param {{rangeM:number, contacts:Array<{id:string,faction:string,rangeM:number,bearingRad:number}>}} reading
+ * @param {number} selfHeadingRad - 自艇の現在針路（相対方位の計算に使う）
+ */
+export function renderRadarPanel(reading, selfHeadingRad = 0) {
+  const canvas = document.getElementById('radar-readout');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  const cx = w / 2;
+  const cy = h / 2;
+  const radius = Math.min(w, h) / 2 - 8;
+  const maxRangeM = reading?.rangeM ?? 1500;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#04140c';
+  ctx.fillRect(0, 0, w, h);
+
+  // レンジリング（3段階）
+  ctx.strokeStyle = 'rgba(90, 220, 150, 0.35)';
+  ctx.lineWidth = 1;
+  for (const frac of [1 / 3, 2 / 3, 1]) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * frac, 0, Math.PI * 2);
+    ctx.stroke();
   }
-  if (reading.contacts.length === 0) {
-    el.textContent = 'contacts: 0';
-    return;
+  // 十字線
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - radius);
+  ctx.lineTo(cx, cy + radius);
+  ctx.moveTo(cx - radius, cy);
+  ctx.lineTo(cx + radius, cy);
+  ctx.stroke();
+
+  // レンジ目盛り（外周のリングに一箇所だけ表示）
+  ctx.fillStyle = 'rgba(150, 230, 190, 0.7)';
+  ctx.font = '9px monospace';
+  ctx.fillText(`${Math.round(maxRangeM)}m`, cx + 3, cy - radius + 9);
+
+  // 回転するスイープ（演出。実データの有無に関わらず動かす）
+  sweepAngle += 0.08;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(sweepAngle);
+  const grad = ctx.createLinearGradient(0, 0, radius, 0);
+  grad.addColorStop(0, 'rgba(90, 240, 160, 0.35)');
+  grad.addColorStop(1, 'rgba(90, 240, 160, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, radius, -0.18, 0.18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // 自艇（中心のマーカー、常に画面上向き＝ヘディングアップ）
+  ctx.fillStyle = '#eafff0';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 5);
+  ctx.lineTo(cx - 3, cy + 4);
+  ctx.lineTo(cx + 3, cy + 4);
+  ctx.closePath();
+  ctx.fill();
+
+  if (!reading?.contacts) return;
+
+  for (const c of reading.contacts) {
+    const relBearing = normalizeAngle(c.bearingRad - selfHeadingRad);
+    // ヘディングアップ: 自艇の正面(relBearing=0)を画面の上(-y)にする
+    const px = cx + Math.sin(relBearing) * (c.rangeM / maxRangeM) * radius;
+    const py = cy - Math.cos(relBearing) * (c.rangeM / maxRangeM) * radius;
+
+    ctx.fillStyle = c.faction === 'defender' ? '#4fd6ff' : '#ff5a5a';
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(220, 240, 230, 0.85)';
+    ctx.font = '8px monospace';
+    ctx.fillText(c.id, px + 5, py - 5);
   }
-  el.innerHTML = reading.contacts
-    .map((c) => `${c.id} (${c.faction})<br>${Math.round(c.rangeM)} m`)
-    .join('<br>');
+}
+
+function normalizeAngle(rad) {
+  return Math.atan2(Math.sin(rad), Math.cos(rad));
 }
 
 export function renderGnssPanel(reading) {

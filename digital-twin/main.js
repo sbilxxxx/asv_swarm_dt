@@ -78,7 +78,8 @@ async function main() {
     if (camTick % 12 === 0) {
       renderCameraPanel(world.observe(heroId, 'camera'));
     }
-    renderRadarPanel(world.observe(heroId, 'radar'));
+    const heroIndex = world.state.indexOf(heroId);
+    renderRadarPanel(world.observe(heroId, 'radar'), world.state.heading[heroIndex]);
     renderGnssPanel(world.observe(heroId, 'gnss'));
 
     requestAnimationFrame(loop);
