@@ -1,0 +1,20 @@
+{
+  "name": "tokyo_bay_minimal",
+  "note": "デモ用の簡略化データ。実際の海岸線・水深とは一致しない。将来S-100/PLATEAU等の実データアダプターに差し替え可能（core/data/adapters/index.js参照）。舞台は東京湾に固定されない。これはデフォルトシナリオの一例。",
+  "originLatLon": { "lat": 35.45, "lon": 139.75 },
+  "coastlineLatLon": [
+    { "lat": 35.63, "lon": 139.75 },
+    { "lat": 35.60, "lon": 139.85 },
+    { "lat": 35.50, "lon": 139.90 },
+    { "lat": 35.35, "lon": 139.85 },
+    { "lat": 35.25, "lon": 139.80 },
+    { "lat": 35.30, "lon": 139.70 },
+    { "lat": 35.45, "lon": 139.65 },
+    { "lat": 35.60, "lon": 139.68 }
+  ],
+  "spawns": [
+    { "id": "defender-1", "faction": "defender", "platform": "asv", "lat": 35.45, "lon": 139.75, "headingDeg": 90 },
+    { "id": "defender-2", "faction": "defender", "platform": "asv", "lat": 35.44, "lon": 139.77, "headingDeg": 90 },
+    { "id": "intruder-1", "faction": "intruder", "platform": "asv", "lat": 35.30, "lon": 139.85, "headingDeg": 300 }
+  ]
+}
