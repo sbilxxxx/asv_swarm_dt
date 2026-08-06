@@ -1,20 +1,20 @@
 {
   "name": "tokyo_bay_minimal",
-  "note": "デモ用の簡略化データ。実際の海岸線・水深とは一致しない。将来S-100/PLATEAU等の実データアダプターに差し替え可能（core/data/adapters/index.js参照）。舞台は東京湾に固定されない。これはデフォルトシナリオの一例。",
+  "note": "デモ用の簡略化データ。実在の海岸線・水深とは一致しない、約1.9km四方の軽量な沿岸モデル（北側が陸地、南側が外洋）。将来S-100/PLATEAU等の実データアダプターに差し替え可能（core/data/adapters/index.js参照）。舞台は東京湾に固定されない。これはデフォルトシナリオの一例。スケールはASVの巡航速度・レーダー探知距離（1500m）に対して意味のある大きさに揃えている。",
   "originLatLon": { "lat": 35.45, "lon": 139.75 },
   "coastlineLatLon": [
-    { "lat": 35.63, "lon": 139.75 },
-    { "lat": 35.60, "lon": 139.85 },
-    { "lat": 35.50, "lon": 139.90 },
-    { "lat": 35.35, "lon": 139.85 },
-    { "lat": 35.25, "lon": 139.80 },
-    { "lat": 35.30, "lon": 139.70 },
-    { "lat": 35.45, "lon": 139.65 },
-    { "lat": 35.60, "lon": 139.68 }
+    { "lat": 35.458534, "lon": 139.739524 },
+    { "lat": 35.458534, "lon": 139.760476 },
+    { "lat": 35.454492, "lon": 139.760476 },
+    { "lat": 35.453144, "lon": 139.756065 },
+    { "lat": 35.454042, "lon": 139.751654 },
+    { "lat": 35.452515, "lon": 139.747243 },
+    { "lat": 35.453593, "lon": 139.743384 },
+    { "lat": 35.452246, "lon": 139.739524 }
   ],
   "spawns": [
-    { "id": "defender-1", "faction": "defender", "platform": "asv", "lat": 35.45, "lon": 139.75, "headingDeg": 90 },
-    { "id": "defender-2", "faction": "defender", "platform": "asv", "lat": 35.44, "lon": 139.77, "headingDeg": 90 },
-    { "id": "intruder-1", "faction": "intruder", "platform": "asv", "lat": 35.30, "lon": 139.85, "headingDeg": 300 }
+    { "id": "defender-1", "faction": "defender", "platform": "asv", "lat": 35.449102, "lon": 139.748346, "headingDeg": 70 },
+    { "id": "defender-2", "faction": "defender", "platform": "asv", "lat": 35.447305, "lon": 139.749449, "headingDeg": 70 },
+    { "id": "intruder-1", "faction": "intruder", "platform": "asv", "lat": 35.448653, "lon": 139.755514, "headingDeg": 250 }
   ]
 }

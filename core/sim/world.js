@@ -12,6 +12,7 @@ import { GnssSensor } from './sensors/gnss.js';
 import { RadarSensor } from './sensors/radar.js';
 import { UnimplementedCameraSensor } from './sensors/camera.js';
 import { CalmSeaEnvironment } from './environment/calm_sea.js';
+import { MessageBus } from './comms.js';
 
 export class World {
   /**
@@ -34,6 +35,7 @@ export class World {
     };
     this.environment = config.environment ?? new CalmSeaEnvironment();
     this.agents = new Map(); // entityId -> AgentBase
+    this.comms = new MessageBus();
   }
 
   /**

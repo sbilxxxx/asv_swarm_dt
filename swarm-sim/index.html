@@ -6,7 +6,10 @@
   <style>
     html, body { margin: 0; height: 100%; background: #0b1416; color: #d7e6ea; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
     #app { display: flex; height: 100%; }
-    #map-canvas { flex: 1 1 auto; background: #0e1b1f; display: block; }
+    /* canvasは置換要素の内在サイズ（デフォルト300x150）がflex-basisの計算に混ざり込み、
+       レイアウトが循環的におかしくなることがあるため、min-width:0のラッパーで切り離す */
+    #map-wrap { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; }
+    #map-canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: #0e1b1f; display: block; }
     #log-panel { width: 280px; flex: 0 0 auto; border-left: 1px solid #23444f; padding: 10px; font-size: 11px; overflow-y: auto; }
     #log-panel h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #6fb3c7; }
     #log-entries div { padding: 2px 0; border-bottom: 1px solid #17262a; font-family: "SFMono-Regular", Consolas, monospace; }
@@ -14,7 +17,7 @@
 </head>
 <body>
   <div id="app">
-    <canvas id="map-canvas"></canvas>
+    <div id="map-wrap"><canvas id="map-canvas"></canvas></div>
     <div id="log-panel">
       <h3>Agent Log</h3>
       <div id="log-entries"></div>

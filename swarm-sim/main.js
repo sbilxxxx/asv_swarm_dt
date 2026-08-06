@@ -2,7 +2,7 @@
  * main.js — swarm-sim View のエントリポイント
  *
  * core/ をインポートしてWorldを初期化し、EnvApi.step() を回しながら
- * map_view.js / agent_view.js / log_panel.js で描画する。
+ * map_view.js / agent_view.js / comms_view.js / log_panel.js で描画する。
  * digital-twin とは別インスタンスのWorldを持つ（今回はランタイム非接続。
  * docs/system-design.md §2.2 参照）。
  *
@@ -17,7 +17,8 @@ import { LlmAgent } from '../core/sim/agents/llm_agent.js';
 import { latLonToLocal } from '../core/coord.js';
 import { createProjection, drawMap } from './map_view.js';
 import { drawAgents } from './agent_view.js';
-import { appendLogEntry } from './log_panel.js';
+import { CommsPulses } from './comms_view.js';
+import { appendLogEntry, appendCommsEntry } from './log_panel.js';
 
 const DECISION_INTERVAL_STEPS = 6; // 意思決定は物理更新より間引く（§計算効率化の指針）
 
@@ -48,6 +49,7 @@ async function main() {
   const env = new EnvApi(world);
   const canvas = document.getElementById('map-canvas');
   const ctx = canvas.getContext('2d');
+  const commsPulses = new CommsPulses();
 
   function resizeCanvas() {
     canvas.width = canvas.clientWidth;
@@ -58,8 +60,11 @@ async function main() {
 
   let observation = env.reset();
   let stepCount = 0;
+  let lastFrameMs = performance.now();
 
-  async function tick() {
+  async function tick(nowMs) {
+    const dt = Math.min((nowMs - lastFrameMs) / 1000, 0.2);
+    lastFrameMs = nowMs;
     stepCount++;
     const decideThisTick = stepCount % DECISION_INTERVAL_STEPS === 0;
 
@@ -76,9 +81,20 @@ async function main() {
     const result = env.step(actions);
     observation = result.observation;
 
+    // エージェント間の通信（構造化メッセージ）をログとマップの両方に反映する
+    for (const ev of env.lastCommsEvents) {
+      appendCommsEntry({ t: world.clock, ...ev });
+    }
+    commsPulses.addEvents(env.lastCommsEvents);
+    commsPulses.update(dt);
+
+    const entities = world.state.snapshot();
+    const entityById = new Map(entities.map((e) => [e.id, e]));
+
     const project = createProjection(canvas, scene);
     drawMap(ctx, canvas, scene, project);
-    drawAgents(ctx, world.state.snapshot(), project);
+    drawAgents(ctx, entities, project);
+    commsPulses.draw(ctx, entityById, project);
 
     requestAnimationFrame(tick);
   }

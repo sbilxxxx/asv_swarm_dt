@@ -24,43 +24,59 @@ async function main() {
   const scenario = await loadScenario();
   const scene = createSceneGeometry(scenario);
 
+  const spawnLocal = scenario.spawns.map((s) => ({ ...s, local: latLonToLocal(s.lat, s.lon) }));
+  const focus = {
+    x: spawnLocal.reduce((sum, s) => sum + s.local.x, 0) / spawnLocal.length,
+    y: spawnLocal.reduce((sum, s) => sum + s.local.y, 0) / spawnLocal.length,
+  };
+
   const canvas = document.getElementById('scene-canvas');
-  const three = buildThreeScene(canvas, scene);
+  const three = buildThreeScene(canvas, scene, { focus });
   const cameraSensor = new ThreeCameraSensor(three);
   const world = new World({ scene, cameraSensor, capacity: scenario.spawns.length });
+  window.__debug = { three, world, focus, scene }; // devtools確認用フック
 
-  for (const spawn of scenario.spawns) {
-    const { x, y } = latLonToLocal(spawn.lat, spawn.lon);
+  for (const spawn of spawnLocal) {
     world.spawn({
       id: spawn.id,
       faction: spawn.faction,
       platform: spawn.platform,
-      x,
-      y,
+      x: spawn.local.x,
+      y: spawn.local.y,
       heading: (spawn.headingDeg * Math.PI) / 180,
     });
   }
 
   const heroId = scenario.spawns[0].id;
   let camTick = 0;
+  let lastT = performance.now();
+  let elapsed = 0;
 
   window.addEventListener('resize', () => three.resize());
 
-  function loop() {
+  function loop(nowMs) {
+    if (window.__debug?.paused) {
+      requestAnimationFrame(loop);
+      return;
+    }
+    const dt = Math.min((nowMs - lastT) / 1000, 0.1);
+    lastT = nowMs;
+    elapsed += dt;
+
     for (let i = 0; i < world.state.count; i++) {
       const platform = world.platformInstances.get(world.state.id[i]);
-      platform.step(world.state, i, { throttle: 0.3, steering: 0.04 }, 0.05);
+      platform.step(world.state, i, { throttle: 0.3, steering: 0.04 }, dt);
     }
-    world.clock += 0.05;
+    world.clock += dt;
 
     three.updateShips(world.state.snapshot());
+    three.updateOverviewCamera(dt);
+    three.render(elapsed);
 
     // カメラは重いので数フレームに1回だけ取得（§計算効率化の指針: 意思決定/センサーの間引き）
     camTick++;
-    if (camTick % 10 === 0) {
+    if (camTick % 12 === 0) {
       renderCameraPanel(world.observe(heroId, 'camera'));
-    } else {
-      three.render();
     }
     renderRadarPanel(world.observe(heroId, 'radar'));
     renderGnssPanel(world.observe(heroId, 'gnss'));
