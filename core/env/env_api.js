@@ -153,6 +153,8 @@ export class EnvApi {
         messages: this.world.comms.receive(id),
         // 自艇の位置・針路（ローカル座標）。相対方位から操舵量を計算するために必要。
         position: { x: this.world.state.x[i], y: this.world.state.y[i], heading: this.world.state.heading[i] },
+        // 防護対象（侵入側の目標／防御側の哨戒基地）。未設定シナリオではnull（mission.jsのbreach判定もnull時はスキップされる）。
+        protectedAsset: this.world.protectedAsset ? { ...this.world.protectedAsset } : null,
         timestamp: this.world.clock,
       };
     }

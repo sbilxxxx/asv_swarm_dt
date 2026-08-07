@@ -36,7 +36,12 @@ async function main() {
   const canvas = document.getElementById('scene-canvas');
   const three = buildThreeScene(canvas, scene, { focus, focusEntityId: heroId });
   const cameraSensor = new ThreeCameraSensor(three);
-  const world = new World({ scene, cameraSensor, capacity: scenario.spawns.length });
+  // protectedAssetはswarm-sim側の攻防ロジック（mission.js）が使う。ここではまだ評価・描画しないが、
+  // 同じWorld設定を素通しでき、Worldインスタンスの構成をswarm-sim/env_apiと揃えておく。
+  const protectedAsset = scenario.protectedAssetLatLon
+    ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+    : null;
+  const world = new World({ scene, cameraSensor, capacity: scenario.spawns.length, protectedAsset });
   window.__debug = { three, world, focus, scene }; // devtools確認用フック
 
   for (const spawn of spawnLocal) {

@@ -24,7 +24,7 @@
 | A-2 | 同じ回転の巻き添えで**子メッシュ配置が崩壊**。デッキ・マスト・ドーム・航海灯が全て高さ+1.76m固定で水平に散らばり、マスト円柱は水平に寝ている | childWorldYOffsets が全て +1.76 | **対応済** — 新座標系で全子メッシュを再定義（デッキ・窓・マスト・ドーム・陣営ストライプ・航海灯） |
 | A-3 | **航跡スプライトが船の18.7m上空に浮いている**。`wake.position.set(0, 0.05*s, -8.5*s)` の local -Z が回転後に world +Y になる | 実測 dy=+18.7m | **対応済** — 新座標系で水面に寝かせて配置 |
 | A-4 | **レーダーPPIが左右鏡像**。`hud.js` の `px = cx + sin(rel)*r` は方位が「北から時計回り」の場合のみ正しい。本リポジトリは数学規約（東0°・CCW正）なので右舷の目標が画面左に出る | intruder-1（相対方位-76.3°=右舷正横）が screen-LEFT に描画 | **対応済** — `px = cx - sin(rel)*r` に修正 |
-| A-5 | **swarm-simのシミュレーション速度がモニタのリフレッシュレート依存**。`env_api.js` の `dt = 0.5` 固定 × requestAnimationFrame毎に1 step。60Hzで30倍速。また0.5s刻みは最大回頭28.6°/stepと粗い。`digital-twin/main.js` は同じASV運動学を可変dt（≤0.1s）で積分するため、**同一coreを謳いながら2つのViewで物理の刻みが異なる**（FR3の精神に反する） | 待機1.5秒でt=29.5（約20倍）、6秒でt=156 | **未対応** |
+| A-5 | **swarm-simのシミュレーション速度がモニタのリフレッシュレート依存**。`env_api.js` の `dt = 0.5` 固定 × requestAnimationFrame毎に1 step。60Hzで30倍速。また0.5s刻みは最大回頭28.6°/stepと粗い。`digital-twin/main.js` は同じASV運動学を可変dt（≤0.1s）で積分するため、**同一coreを謳いながら2つのViewで物理の刻みが異なる**（FR3の精神に反する） | 待機1.5秒でt=29.5（約20倍）、6秒でt=156 | **対応済（swarm-sim側）** — `swarm-sim/main.js` を実時間アキュムレータ方式へ変更。`env.dt`(既定0.1s)刻みで固定ステップ実行し、`TIME_SCALE=3`倍速のみを掛ける（等倍だと1エピソード最大240秒待たされるため）。1フレームの加算実時間は`MAX_FRAME_DT_S=0.25s`でクランプしバックグラウンドタブ復帰時の暴走加算を防止。意思決定間隔もフレームではなくシムステップ数基準（`DECISION_INTERVAL_STEPS=6` ≒0.6シム秒毎）に変更。**digital-twin側は本タスクの対象外のため未対応のまま**（`digital-twin/main.js`は引き続き`Math.min((nowMs-lastT)/1000, 0.1)`の可変dtで積分しており、swarm-simとdigital-twinで物理の刻み方が異なる状態はまだ残っている） |
 | A-6 | **`reset()` がエピソードを再初期化しない**。clockとログの初期化のみ。Gym風APIと言いながら2エピソード目が回せない | 200 step走行後に`reset()`しても位置は(260.6,-264.9)のまま（スポーン位置(-150,-100)に戻らない） | **対応済** — `EnvApi.reset(meta)` が `World.resetEntities()` を呼んでから新しいログエピソードを開始するよう接続。`tests/core_smoke.test.js` の `testResetReturnsToSpawn` / `testBreachedOutcomeAndSecondEpisode` で2エピソード連続実行を回帰確認 |
 | A-7 | **`coord.js` のモジュールグローバルorigin**。別originのシナリオで`createSceneGeometry()`を呼ぶと既存ワールドのGNSSが化ける。「グローバル変数非依存・並列実行を妨げない」という自らの設計原則に違反 | 実測: (35.45,139.75)→(34.00,133.50)に変化 | **未対応** |
 | A-8 | **`EntityState.indexOf` がaliveを見ない、そもそも死亡経路が無い**。alive=0にするAPIがリポジトリ全体に存在しない。snapshot/radar/commsの`!alive[j]`スキップは現状デッドコード | 手動でalive=0にしても`indexOf`は生きたインデックスを返す | **対応済** — `indexOf`自体はaliveを見ない仕様のまま維持（`resetEntities()`が死亡エンティティを見つけて復活させる必要があるため）。ガードは適用箇所である`EnvApi.step()`のaction適用ループに追加し、`alive[i]===0`の艇へはplatform.step()を呼ばないようにした。`mission.js`の撃破経路と合わせて、死亡エンティティが実際に停止することを`tests/core_smoke.test.js`で確認 |
@@ -41,7 +41,7 @@
 | B-3 | **`environment.sample()` 呼び出しゼロ**。`world.js` で保持するだけで `asv.js` の運動学は環境力を参照しない。**波サロゲートモデルへの「差し替え口」は、差し替えても何も変わらない口** | **未対応** |
 | B-4 | **`obstacles` はスキーマのみ**。型定義以外に参照ゼロ。3D/2Dとも描画されず、衝突判定も無く、シナリオJSONにデータも無い | **未対応** |
 | B-5 | **AUV「登録するだけで済む」は不成立**。`EntityState` に深度(z)が無く、radar/gnss/commsも2D前提。実際はstate・センサーの改修が必要 | **未対応**（ドキュメントの記述を正直にするだけでも可） |
-| B-6 | **FR8ログの実質未達**。`{t, actions, observation}` のみで、FR8が明記する報酬相当の評価値・エピソード終了(doneは常にfalse)・シード・シナリオメタデータが無い。`toJson()` の呼び出し元もゼロで、記録は取り出す手段のないままメモリに溜まり捨てられる。**3隻2000 stepで9.7MB、30隻2000 stepで `RangeError: Invalid string length` でクラッシュ**（1 step≈213KB） | **対応済（coreの記録形式・reward/done/outcome側）** — `episode_logger.js` をネスト保存からper-agentフラット行のJSON Lines（`episode_start`/`step`/`episode_end`）へ再設計し、`toJson()`は廃止して`toJsonl()`に置換。`EnvApi.step()`が`evaluateMission()`のreward/done/outcomeを各stepの生存エージェント行へ書き込み、`reset(meta)`が`scenario`/`seed`等をエピソードヘッダ行へ渡す。`tests/core_smoke.test.js`の`testLoggerStress`で30隻×2000 stepを実行し、`toJsonl()`がクラッシュせず全60,001行が`JSON.parse`できることを確認（約15.4MB）。**UIのダウンロードボタン・Node側ファイル書き出しは別タスク（View側）の作業範囲として未対応のまま** |
+| B-6 | **FR8ログの実質未達**。`{t, actions, observation}` のみで、FR8が明記する報酬相当の評価値・エピソード終了(doneは常にfalse)・シード・シナリオメタデータが無い。`toJson()` の呼び出し元もゼロで、記録は取り出す手段のないままメモリに溜まり捨てられる。**3隻2000 stepで9.7MB、30隻2000 stepで `RangeError: Invalid string length` でクラッシュ**（1 step≈213KB） | **対応済（coreの記録形式・reward/done/outcome側）** — `episode_logger.js` をネスト保存からper-agentフラット行のJSON Lines（`episode_start`/`step`/`episode_end`）へ再設計し、`toJson()`は廃止して`toJsonl()`に置換。`EnvApi.step()`が`evaluateMission()`のreward/done/outcomeを各stepの生存エージェント行へ書き込み、`reset(meta)`が`scenario`/`seed`等をエピソードヘッダ行へ渡す。`tests/core_smoke.test.js`の`testLoggerStress`で30隻×2000 stepを実行し、`toJsonl()`がクラッシュせず全60,001行が`JSON.parse`できることを確認（約15.4MB）。**UIのダウンロードボタンは本タスクで対応済** — `swarm-sim/hud_panel.js`の`wireDownloadButton()`が`env.logger.toJsonl()`をBlob化し、「ログDL (.jsonl)」ボタンから`.jsonl`としてダウンロードできる（core側はfs/DOM非依存のまま、Blob化・aタグ操作はView側に隔離）。Node側のファイル書き出し（headlessランナーからの保存）は未対応のまま |
 | B-7 | **LLM/VLM/VLAのコードが1行も無い**。`decideFn` の注入口は良い設計だが、プロンプト生成・出力パース・Ollama呼び出しの実装例が皆無。GPU申請の「VLM推論を回す」との距離は認識しておくべき（**現状、GPUで回す推論対象が存在しない**） | **未対応** |
 | B-8 | **「海域を固定しない」原則と `landmarks.js` の矛盾**。`scene_builder.js` が無条件に `buildLandmarks()`（東京タワー・レインボーブリッジ・富士山・お台場を絶対座標でハードコード）を追加。シナリオを別海域に差し替えても東京の景観が描かれる | **未対応** |
 | B-9 | **運用リスク: 未コミット改善がGitHub未反映**。審査員がURLで見る公開デモは旧版 | **要注意** — 作業のたびに push すること |
@@ -81,7 +81,25 @@
 - しかし捕捉判定も終了条件も無いため、**約30シム秒で3艇が同一点に収束し、以後永久に団子で回転**
 - ログは同一の contact_report 行（confidence=1.00）が毎秒数十行流れるスパムで、MAX 200件=視界約5秒分
 - 守るべき対象も突破目標も無いため「攻防」ではなく「対称な相互追跡」に見える
-- → **対応中**: `mission.js` で防護対象・捕捉判定・勝敗を実装
+- → **対応済**: `mission.js`（core側、既存コミット）＋本タスクでView・エージェント行動側を配線。
+  防護対象（`protectedAssetLatLon`、防御艇スポーンより南西・外洋側の水上）を追加し、侵入側はそこへ
+  向かい、防御側は迎撃→通報位置調査→（何も無ければ）防護対象を哨戒、という非対称な行動になった
+  （`core/sim/agents/rule_based_fallback.js`）。swarm-simに防護対象マーカー＋突破半径円・エピソード
+  HUD（episode数・シム時計・防衛/突破/時間切れタリー）・結果バナー（防衛成功/突破された/時間切れ、
+  3秒表示後に自動`reset()`してエピソードを繰り返す）・ミッションイベントのログ表示・ログJSONL
+  ダウンロードボタンを実装（`swarm-sim/main.js`, `map_view.js`, `hud_panel.js`, `log_panel.js`）。
+  スクリーンショットで確認: 3隻は同一点へ収束せず、一定の隊列を保ったまま防護対象へ向かう動きになった
+  （＝もはや「団子」ではない）。ただし後述の限界あり
+  - **限界（実測で判明・要フォローアップ）**: `AsvPlatform`は陣営に関係なく同一の`MAX_SPEED_MPS=6`で
+    頭打ちになるため、加速が終わった後は防御側・侵入側とも巡航速度が事実上同じになる。防御側の
+    迎撃ロジックは相手の現在位置をそのまま追う純追跡（lead無し）のままなので、等速の純追跡は
+    幾何学的に距離をゼロへ詰め切れない（`INTERCEPT_RANGE_M=60`に対し、実測では最短でも約94〜96mで
+    頭打ち）。その結果、既定シナリオでは**毎回ほぼ同じタイミング（t≈167〜170s）で`breached`に終わる**
+    決定論的な展開になっている（`防衛`・`時間切れ`は理論上到達可能だが、この初期配置・行動則の
+    組み合わせでは発生しにくい）。今回は防御側の迎撃throttleを0.6→1.0（通報追跡は0.55→0.8）へ
+    引き上げたが、上記の理由で勝敗バランスまでは変わらない。恒常的な解決には、防御側に予測（lead）
+    操舵を持たせるか、陣営別に最高速度差を設ける（`asv.js`の改修）等が必要で、本タスクの
+    「防御側の迎撃ロジックは既存のまま」という指示の範囲を超えるため、フォローアップ課題として残す
 
 **審査員目線の結論**: 現状は「動く骨格のデモ」であり、「計算資源を投じたくなる規模・密度の何かが起きている画」ではない。数十秒見れば飽和することが伝わってしまう。
 
@@ -94,10 +112,10 @@
 | 1 | ローカル改善のcommit & push。申請URLの実体を最新化 | ~10分 | **要実施** |
 | 2 | 3D船の回転規約修正＋子メッシュ座標の再定義＋規約のコメント明文化 | ~1時間 | **対応済** |
 | 3 | レーダー左右反転修正と、GNSS headingの北基準CW・0〜360°正規化表示（`gnss.js`は数学規約の生値で360°超えも表示される） | ~30分 | **一部対応**（レーダーのみ。GNSS表示は未対応） |
-| 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応済（core側）** — `EnvApi.step()`が`evaluateMission()`を呼び`{observation, reward, done, info:{outcome, events}}`を返す。`EnvApi.reset()`が`World.resetEntities()`を呼びエピソード反復が実際に機能。dtも0.1sへ変更（旧0.5sは粗すぎた）。**swarm-sim側でdoneを見て自動リセットするView配線（2D画面での自動リプレイ）は別タスク** |
+| 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応済（core・View双方）** — `EnvApi.step()`が`evaluateMission()`を呼び`{observation, reward, done, info:{outcome, events}}`を返す。`EnvApi.reset()`が`World.resetEntities()`を呼びエピソード反復が実際に機能。dtも0.1sへ変更（旧0.5sは粗すぎた）。**swarm-sim側の配線もこのタスクで完了**: シナリオに`protectedAssetLatLon`を追加、`observation.protectedAsset`をcore/env_api.jsに追加（`tests/core_smoke.test.js`で回帰確認）、`rule_based_fallback.js`を陣営別行動（侵入=目標到達＋軽い回避、防御=迎撃→通報調査→防護対象の哨戒）に書き換え、swarm-simにマーカー・突破半径円・エピソードHUD・結果バナー・自動`reset()`ループ・ミッションイベントログ・JSONLダウンロードボタンを実装。詳細と既知の限界（防御側が構造的に追いつけず`breached`に偏る決定論的な展開になっている点）はD節参照 |
 | 5 | headlessランナー同梱（60行程度のNodeスクリプト）＋READMEに実測steps/s記載。「GPUで並列に回せる」を宣言から実証に変える | ~1-2時間 | **未対応** |
 | 6 | coord.jsの脱シングルトン化。originをSceneGeometryに持たせる | ~1時間 | **未対応** |
-| 7 | ログ形式の再設計。観測全文ネスト保存をやめ、per-agentフラット行のJSONL＋UIダウンロード導線 | ~2時間 | **一部対応** — `episode_logger.js`のper-agentフラットJSONL化（`toJsonl()`）は対応済。UIダウンロード導線は未対応（View側の別タスク） |
+| 7 | ログ形式の再設計。観測全文ネスト保存をやめ、per-agentフラット行のJSONL＋UIダウンロード導線 | ~2時間 | **対応済** — `episode_logger.js`のper-agentフラットJSONL化（`toJsonl()`）に加え、UIダウンロード導線（`swarm-sim/hud_panel.js`の「ログDL (.jsonl)」ボタン、Blob経由でダウンロード）を本タスクで実装 |
 | 8 | レジストリの配線。シナリオJSONに `"adapter": "manual_coastline"` を持たせ、両mainが registry 経由でロード。`spawnsAreaLatLon` も通す。`obstacles` は描画するか当面スキーマから外す | ~1時間 | **未対応** |
 | 9 | `environment.sample()` を `asv.js` のstepで参照し、波モデル差し込み口を「効く」状態にする。3Dカメラ演出の改善も併せて | ~2-3時間 | **未対応** |
 

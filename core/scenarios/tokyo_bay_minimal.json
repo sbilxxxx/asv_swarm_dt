@@ -16,5 +16,10 @@
     { "id": "defender-1", "faction": "defender", "platform": "asv", "lat": 35.449102, "lon": 139.748346, "headingDeg": 70 },
     { "id": "defender-2", "faction": "defender", "platform": "asv", "lat": 35.447305, "lon": 139.749449, "headingDeg": 70 },
     { "id": "intruder-1", "faction": "intruder", "platform": "asv", "lat": 35.448653, "lon": 139.755514, "headingDeg": 250 }
-  ]
+  ],
+  "protectedAssetLatLon": {
+    "lat": 35.445958,
+    "lon": 139.746692,
+    "note": "防護対象（例: 洋上観測ブイ）。防御艇スポーンより南西・外洋側の水上に配置し、侵入艇は防御艇の警戒線を突破しない限り到達できない位置とする（陸地には置かない）。"
+  }
 }

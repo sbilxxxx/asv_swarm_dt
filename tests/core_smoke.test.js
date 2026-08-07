@@ -91,7 +91,8 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
   const x = 100;
   const y = 200;
   const world = new World({ scene: {}, capacity: 4, protectedAsset: { x, y } });
-  world.spawn({ id: 'intruder-1', faction: 'intruder', x, y, heading: 0 });
+  // agentを登録しないとEnvApi._observationForAll()がこのentityを素通りする（agents Mapのkeysを回すため）
+  world.spawn({ id: 'intruder-1', faction: 'intruder', x, y, heading: 0, agent: {} });
 
   const env = new EnvApi(world, { dt: 0.1 });
   env.reset({ scenario: 'forced-breach', seed: 1 });
@@ -103,6 +104,12 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
   assert.ok(
     result.info.events.some((e) => e.type === 'asset_breached'),
     'events should contain asset_breached'
+  );
+  // observationにprotectedAssetが含まれること（View側の目標到達・哨戒行動に必要）
+  assert.deepStrictEqual(
+    result.observation['intruder-1'].protectedAsset,
+    { x, y },
+    'observation.protectedAsset should mirror world.protectedAsset'
   );
 
   const jsonl = env.logger.toJsonl();
@@ -128,7 +135,7 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
 async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi }) {
   // 防御艇を侵入艇の近く（INTERCEPT_RANGE_M=60m以内）に置き、1歩目で'defended'を強制する
   const world = new World({ scene: {}, capacity: 4 }); // protectedAsset無し=breach判定はスキップされる
-  world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0 });
+  world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0, agent: {} });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
   const env = new EnvApi(world, { dt: 0.1 });
@@ -138,6 +145,11 @@ async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi }) 
   assert.strictEqual(result.done, true, 'defended episode should be done on first step');
   assert.strictEqual(result.info.outcome, 'defended', 'outcome should be defended');
   assert.strictEqual(result.reward, 1, 'defended reward should be +1');
+  assert.strictEqual(
+    result.observation['defender-1'].protectedAsset,
+    null,
+    'observation.protectedAsset should be null when the world has no protectedAsset configured'
+  );
 
   const i = world.state.indexOf('intruder-1');
   assert.strictEqual(world.state.alive[i], 0, 'intercepted intruder should be alive=0');
