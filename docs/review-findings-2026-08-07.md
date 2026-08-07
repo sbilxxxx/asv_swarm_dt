@@ -64,6 +64,7 @@
 **その他**
 - `env_api.js` は `_reportContacts` と `_observationForAll` で**radar観測を毎step全エージェント2回計算**しており、O(n²)センサーの無駄が多数体化で倍効く
 - **最大の問題: headlessランナーがリポジトリに同梱されていない**。レビュアーが外部スクリプトを書いて初めて「回る」ことを実証できた。審査員は書いてくれない
+  → **対応済（E-5）**: [`scripts/headless_run.js`](../scripts/headless_run.js)を同梱。`node scripts/headless_run.js --episodes 5 --boats 30`のようにリポジトリ内だけで実行・実測でき、外部スクリプト不要になった。実測steps/sはREADME「ヘッドレス実行」節およびE-5行を参照
 
 ---
 
@@ -123,7 +124,7 @@
 | 2 | 3D船の回転規約修正＋子メッシュ座標の再定義＋規約のコメント明文化 | ~1時間 | **対応済** |
 | 3 | レーダー左右反転修正と、GNSS headingの北基準CW・0〜360°正規化表示（`gnss.js`は数学規約の生値で360°超えも表示される） | ~30分 | **一部対応**（レーダーのみ。GNSS表示は未対応） |
 | 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応済（core・View双方）** — `EnvApi.step()`が`evaluateMission()`を呼び`{observation, reward, done, info:{outcome, events}}`を返す。`EnvApi.reset()`が`World.resetEntities()`を呼びエピソード反復が実際に機能。dtも0.1sへ変更（旧0.5sは粗すぎた）。**swarm-sim側の配線もこのタスクで完了**: シナリオに`protectedAssetLatLon`を追加、`observation.protectedAsset`をcore/env_api.jsに追加（`tests/core_smoke.test.js`で回帰確認）、`rule_based_fallback.js`を陣営別行動（侵入=目標到達＋軽い回避、防御=迎撃→通報調査→防護対象の哨戒）に書き換え、swarm-simにマーカー・突破半径円・エピソードHUD・結果バナー・自動`reset()`ループ・ミッションイベントログ・JSONLダウンロードボタンを実装。初回実装では防御側が構造的に追いつけず`breached`に偏る決定論的な展開になっていたが、lead pursuit＋エピソード別侵入経路のフォローアップで解消（`defended`/`breached`双方の発生を6エピソード連続実行で回帰確認）。詳細はD節参照 |
-| 5 | headlessランナー同梱（60行程度のNodeスクリプト）＋READMEに実測steps/s記載。「GPUで並列に回せる」を宣言から実証に変える | ~1-2時間 | **未対応** |
+| 5 | headlessランナー同梱（60行程度のNodeスクリプト）＋READMEに実測steps/s記載。「GPUで並列に回せる」を宣言から実証に変える | ~1-2時間 | **対応済** — [`scripts/headless_run.js`](../scripts/headless_run.js)（npm依存なし、CommonJS＋`await import()`でcore/ESMを動的ロード）を追加。`--episodes N`（既定5）・`--boats N`（既定はシナリオ既定の3隻、超過分はリング状に決定論的合成）・`--out path.jsonl`（`env.logger.toJsonl()`をNode側でファイル書き出し）・`--quiet`に対応し、エピソードごとのoutcome/シム時間/壁時計時間と、最後に総steps/s（1隻あたりも）を出力する。実測値（Windowsノート、Node v22.17.0、Intel Core i5-1145G7）: 3隻で約38,400 steps/s、30隻（合成spawn）で約1,900〜2,000 steps/s。README「ヘッドレス実行」節に実行コマンドと実測値を記載。`node tests/core_smoke.test.js`は無改造で全件PASSを確認済み |
 | 6 | coord.jsの脱シングルトン化。originをSceneGeometryに持たせる | ~1時間 | **未対応** |
 | 7 | ログ形式の再設計。観測全文ネスト保存をやめ、per-agentフラット行のJSONL＋UIダウンロード導線 | ~2時間 | **対応済** — `episode_logger.js`のper-agentフラットJSONL化（`toJsonl()`）に加え、UIダウンロード導線（`swarm-sim/hud_panel.js`の「ログDL (.jsonl)」ボタン、Blob経由でダウンロード）を本タスクで実装 |
 | 8 | レジストリの配線。シナリオJSONに `"adapter": "manual_coastline"` を持たせ、両mainが registry 経由でロード。`spawnsAreaLatLon` も通す。`obstacles` は描画するか当面スキーマから外す | ~1時間 | **未対応** |
