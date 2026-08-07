@@ -26,6 +26,8 @@ export class EnvApi {
     this.dt = dt;
     /** @type {Array<{from:string,to:string,type:string,confidence:number}>} 直近ステップで配信されたメッセージ（表示用） */
     this.lastCommsEvents = [];
+    // done後にstep()が再度呼ばれた場合の短絡用（下のstep()コメント参照）。
+    this._terminalResult = null;
   }
 
   /**
@@ -37,6 +39,7 @@ export class EnvApi {
   reset(meta = {}) {
     this.world.resetEntities();
     this.logger.startEpisode(meta);
+    this._terminalResult = null;
     return this._observationForAll();
   }
 
@@ -44,6 +47,14 @@ export class EnvApi {
    * @param {Record<string, {throttle:number, steering:number}>} actions - entityId -> action
    */
   step(actions) {
+    // done後、reset()を挟まずstep()が呼ばれ続けるケース（例: swarm-simの描画ループが
+    // done判定を見ずに毎フレーム無条件でstep()を呼ぶ）に対する短絡。
+    // EPISODE_TIME_LIMIT_S(240s)により全エピソードは必ずtimeoutでdoneになるため、
+    // ガード無しだと物理・evaluateMission・ロギングが永久に空回りし続け、
+    // 特にepisode_end行が毎フレーム追記されてログが際限なく肥大化する（B-6の再発）。
+    // reset()するまでは直前のdone結果をそのまま返し、World/ロガーの状態を一切進めない。
+    if (this._terminalResult) return this._terminalResult;
+
     for (const [entityId, action] of Object.entries(actions)) {
       const i = this.world.state.indexOf(entityId);
       if (i < 0) continue;
@@ -60,16 +71,21 @@ export class EnvApi {
     const mission = evaluateMission(this.world);
 
     this._logStep(actions, mission);
-    if (mission.done) {
-      this.logger.endEpisode({ t: this.world.clock, outcome: mission.outcome });
-    }
 
-    return {
+    const result = {
       observation,
       reward: mission.reward,
       done: mission.done,
       info: { outcome: mission.outcome, events: mission.events },
     };
+
+    if (mission.done) {
+      // episode_end行は1エピソードにつき1回だけ。以降のstep()はこのresultをキャッシュ経由で返す。
+      this.logger.endEpisode({ t: this.world.clock, outcome: mission.outcome });
+      this._terminalResult = result;
+    }
+
+    return result;
   }
 
   /** 生存エンティティごとに1行、フラットなstep行をロガーへ渡す（core/log/episode_logger.js参照）。 */

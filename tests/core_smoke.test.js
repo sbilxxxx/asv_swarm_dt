@@ -153,6 +153,47 @@ async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi }) 
   console.log('OK: dead (alive=0) intruder ignores supplied actions and stays put');
 }
 
+async function testStepAfterDoneIsIdempotent({ World, EnvApi }) {
+  // done後、reset()を挟まずstep()を呼び続けるケース（swarm-simの描画ループがdoneを
+  // 見ずに毎フレームstep()を呼ぶ想定）で、episode_end行が複製されず、Worldの状態も
+  // 進まないことを確認する（コードレビュー指摘: B-6再発の回帰テスト）。
+  const world = new World({ scene: {}, capacity: 4 });
+  world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0 });
+  world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
+
+  const env = new EnvApi(world, { dt: 0.1 });
+  env.reset({ scenario: 'forced-defend-idempotent', seed: 1 });
+
+  const first = env.step({}); // 1歩目でintercept -> done=true, outcome='defended'
+  assert.strictEqual(first.done, true, 'first step should already be done');
+
+  const clockAfterDone = world.clock;
+  const rowCountAfterDone = env.logger.rows.length;
+
+  for (let n = 0; n < 20; n++) {
+    // 死んだ侵入艇にすら動くはずのactionを与えて、それでも状態が進まないことを確認する
+    const again = env.step({ 'intruder-1': { throttle: 1, steering: 1 } });
+    assert.strictEqual(again.done, true, `step ${n} after done should still report done`);
+    assert.strictEqual(again.info.outcome, 'defended', `step ${n} after done should keep the original outcome`);
+    assert.strictEqual(again, first, `step ${n} after done should return the exact cached terminal result`);
+  }
+
+  assert.strictEqual(world.clock, clockAfterDone, 'world.clock must not advance after done without reset()');
+  assert.strictEqual(
+    env.logger.rows.length,
+    rowCountAfterDone,
+    'logger must not grow after done without reset() (no repeated episode_end / step rows)'
+  );
+
+  const jsonl = env.logger.toJsonl();
+  const endRows = jsonl
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .filter((row) => row.type === 'episode_end');
+  assert.strictEqual(endRows.length, 1, 'exactly one episode_end row should be logged for this episode');
+  console.log('OK: step() after done is idempotent (single episode_end row, world state frozen until reset())');
+}
+
 async function testTimeoutOutcome({ World, EnvApi, missionMod }) {
   const world = new World({ scene: {}, capacity: 4 });
   // 互いに遠く離して配置し、actionも与えないので誰も動かない -> timeout一択
@@ -216,6 +257,7 @@ async function main() {
   await testResetReturnsToSpawn(core);
   await testBreachedOutcomeAndSecondEpisode(core);
   await testDefendedOutcomeAndDeadIntruderStopsMoving(core);
+  await testStepAfterDoneIsIdempotent(core);
   await testTimeoutOutcome(core);
   await testLoggerStress(core);
   console.log('\nAll core smoke tests passed.');
