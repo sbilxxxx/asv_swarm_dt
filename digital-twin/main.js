@@ -71,7 +71,10 @@ async function main() {
 
     for (let i = 0; i < world.state.count; i++) {
       const platform = world.platformInstances.get(world.state.id[i]);
-      platform.step(world.state, i, { throttle: 0.3, steering: 0.04 }, dt);
+      // B-3対応: EnvApi.step()と同じくenvironment/現在時刻を渡す（差し込み口が両方の
+      // 呼び出し経路で一貫して効くようにする。CalmSeaEnvironmentは近ゼロ効果のため
+      // 見た目は変化しない）。
+      platform.step(world.state, i, { throttle: 0.3, steering: 0.04 }, dt, world.environment, world.clock);
     }
     world.clock += dt;
 
