@@ -616,6 +616,24 @@ export function buildThreeScene(canvas, scene, options = {}) {
     navLight.position.set(mastX, mastBaseY + 1.0 * s, 0);
     group.add(navLight);
 
+    // デッキ部品（品質向上計画 優先度5・ストレッチ）: 小さな部品を数個置くだけで「作られた感」を出す。
+    // シミュレーション・センサーロジックには一切関与しない純粋な見た目装飾。
+    const fittingMat = new THREE.MeshStandardMaterial({ color: 0xc7ccce, roughness: 0.55, metalness: 0.15 });
+    // 通信用ホイップアンテナ: ブリッジ後方に細く高く
+    const whipAntenna = new THREE.Mesh(new THREE.CylinderGeometry(0.02 * s, 0.03 * s, 1.6 * s, 8), fittingMat);
+    const whipX = -0.95 * s;
+    whipAntenna.position.set(whipX, hullProfileAtX(whipX / s).deckY * s + 0.8 * s, 0.35 * s);
+    group.add(whipAntenna);
+    // 船首の係船金物（クリート）2個: 甲板端に小さく張り出す直方体
+    const cleatGeo = new THREE.BoxGeometry(0.22 * s, 0.1 * s, 0.36 * s);
+    [-1, 1].forEach((side) => {
+      const cleatX = 2.2 * s;
+      const cleatProfile = hullProfileAtX(cleatX / s);
+      const cleat = new THREE.Mesh(cleatGeo, fittingMat);
+      cleat.position.set(cleatX, cleatProfile.deckY * s + 0.05 * s, side * cleatProfile.hbD * s * 0.85);
+      group.add(cleat);
+    });
+
     // 加算合成で「光る航跡」にする（参考にした操船シミュレータのwakeスプライトと同じ狙い）
     const wakeMat = new THREE.MeshBasicMaterial({
       map: wakeTexture,
@@ -633,6 +651,27 @@ export function buildThreeScene(canvas, scene, options = {}) {
     wake.rotation.z = Math.PI / 2;
     wake.position.set(-8.5 * s, -SHIP_DECK_HEIGHT + 0.25, 0);
     group.add(wake);
+
+    // 船首波（品質向上計画 優先度5・ストレッチ）: 船首が水を切る白いV字。
+    // 航跡（wake）と同じ「水面に寝かせた加算合成の平面」を、船首を起点に左右へ末広がりに配置する。
+    // 航跡と同じopacity制御（速度に応じて濃く）を共有するので、ここでは同じ wakeMat を使い回す。
+    const bowWaveGeom = new THREE.PlaneGeometry(1.1 * s, 4.6 * s);
+    const bowWaveAngle = 0.5; // ラジアン。船首から左右に開く角度
+    [-1, 1].forEach((side) => {
+      const bowWave = new THREE.Mesh(bowWaveGeom, wakeMat);
+      bowWave.rotation.x = -Math.PI / 2;
+      bowWave.rotation.z = Math.PI / 2;
+      bowWave.rotation.y = side * bowWaveAngle;
+      // 船首材（x=3.6*s）を平面の近い方の端（開き角方向に -half length）に一致させ、
+      // 遠い方の端が船体側面に沿って後方・外側へ流れるようにする
+      // （実測: 中心を船首の少し後ろに置いただけでは、平面が船体の下に隠れて見えなかった）。
+      const bowTipX = 3.6 * s;
+      const halfLen = 4.6 * s * 0.5;
+      const centerX = bowTipX + Math.cos(side * bowWaveAngle) * halfLen;
+      const centerZ = Math.sin(side * bowWaveAngle) * halfLen;
+      bowWave.position.set(centerX, -SHIP_DECK_HEIGHT + 0.25, centerZ);
+      group.add(bowWave);
+    });
 
     scene3d.add(group);
     const entry = { group, wakeMat };
