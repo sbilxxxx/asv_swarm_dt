@@ -14,13 +14,13 @@
  * @typedef {Object} SceneGeometry
  * @property {string} name
  * @property {{lat: number, lon: number}} originLatLon - ローカル座標系の原点
- * @property {{origin: {lat:number,lon:number}, latLonToLocal: Function, localToLatLon: Function}} projection - このシーン専用の緯度経度⇔ローカル座標変換（core/coord.js#createProjection の戻り値。A-7/E-6対応: シーンごとに独立させ、モジュールグローバルoriginを廃止した）
+ * @property {{origin: {lat:number,lon:number}, latLonToLocal: Function, localToLatLon: Function}} projection - このシーン専用の緯度経度⇔ローカル座標変換（core/coord.js#createOriginProjection の戻り値。A-7/E-6対応: シーンごとに独立させ、モジュールグローバルoriginを廃止した）
  * @property {Array<{x: number, y: number}>} coastline - ローカル座標のポリゴン頂点（1周分）
  * @property {{minX:number,maxX:number,minY:number,maxY:number}} bounds - 表示・カメラ配置の基準となる範囲（coastline＋運用エリアの外接矩形）
  * @property {string} [landmarkSet] - 任意。digital-twinの背景ランドマーク群の選択キー（例: "tokyo_bay"）。未指定ならランドマークを描画しない（B-8対応）
  */
 
-import { createProjection } from '../coord.js';
+import { createOriginProjection } from '../coord.js';
 
 /**
  * boundsはcoastlineだけでなく、実際にエンティティが運用される範囲（spawnsAreaLatLon）も
@@ -31,7 +31,7 @@ import { createProjection } from '../coord.js';
  * @returns {SceneGeometry}
  */
 export function createSceneGeometry(input) {
-  const projection = createProjection(input.originLatLon);
+  const projection = createOriginProjection(input.originLatLon);
   const coastline = input.coastlineLatLon.map((p) => projection.latLonToLocal(p.lat, p.lon));
   const spawnsArea = (input.spawnsAreaLatLon ?? []).map((p) => projection.latLonToLocal(p.lat, p.lon));
   return {

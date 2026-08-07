@@ -8,9 +8,13 @@
  * 保持しており、別originのシナリオでcreateSceneGeometry()を呼ぶと既存ワールドのGNSSが
  * 壊れる不具合があった（「グローバル変数非依存・並列実行を妨げない」という設計原則への違反。
  * 実測: 既存ワールドのGNSSが(35.45,139.75)→(34.00,133.50)へ変化した）。
- * 現在はモジュールグローバル状態を一切持たず、createProjection(originLatLon) がシナリオ（scene）
+ * 現在はモジュールグローバル状態を一切持たず、createOriginProjection(originLatLon) がシナリオ（scene）
  * ごとに独立した変換関数のペアを返す。呼び出し側（SceneGeometry）がこのprojectionを保持し、
  * 複数のWorld/シーンを同時に存在させても互いのorigin変換が干渉しない。
+ *
+ * 命名注意: swarm-sim/map_view.js にも同名の createProjection(canvas, scene) が別に存在するが、
+ * あちらは「メートル→画面ピクセル」の全く別の変換（緯度経度は関与しない）。混同を避けるため、
+ * このモジュールの関数は createOriginProjection という名前にしている。
  */
 
 const EARTH_RADIUS_M = 6378137;
@@ -24,7 +28,7 @@ const EARTH_RADIUS_M = 6378137;
  *   localToLatLon: (x: number, y: number) => {lat: number, lon: number},
  * }}
  */
-export function createProjection(originLatLon) {
+export function createOriginProjection(originLatLon) {
   const origin = { ...originLatLon };
   const latRad = (origin.lat * Math.PI) / 180;
   const cosLat = Math.cos(latRad);

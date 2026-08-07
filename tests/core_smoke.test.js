@@ -41,14 +41,14 @@ async function loadCore() {
   const { EnvApi } = await import('../core/env/env_api.js');
   const missionMod = await import('../core/sim/mission.js');
   const { loadSceneFromScenario } = await import('../core/data/adapters/index.js');
-  const { createProjection } = await import('../core/coord.js');
+  const { createOriginProjection } = await import('../core/coord.js');
   const { LlmAgent } = await import('../core/sim/agents/llm_agent.js');
-  return { World, EnvApi, missionMod, loadSceneFromScenario, createProjection, LlmAgent };
+  return { World, EnvApi, missionMod, loadSceneFromScenario, createOriginProjection, LlmAgent };
 }
 
 /** scene:{} だけでは動かないテスト（GnssSensorがworld.scene.projectionを見るため）向けの最小scene */
-function minimalScene({ createProjection }, originLatLon = { lat: 35.45, lon: 139.75 }) {
-  return { projection: createProjection(originLatLon) };
+function minimalScene({ createOriginProjection }, originLatLon = { lat: 35.45, lon: 139.75 }) {
+  return { projection: createOriginProjection(originLatLon) };
 }
 
 /** 実シナリオファイルからWorldを構築する（core自身はfetchできないため、テスト側でJSONを読む） */
@@ -151,11 +151,11 @@ async function testResetReturnsToSpawn({ World, EnvApi, loadSceneFromScenario })
   console.log('OK: reset() restores spawn positions/heading/speed/alive after movement');
 }
 
-async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi, createProjection }) {
+async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi, createOriginProjection }) {
   // 侵入艇をprotectedAssetの真上にスポーンさせ、1歩目で'breached'を強制する
   const x = 100;
   const y = 200;
-  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4, protectedAsset: { x, y } });
+  const world = new World({ scene: minimalScene({ createOriginProjection }), capacity: 4, protectedAsset: { x, y } });
   // agentを登録しないとEnvApi._observationForAll()がこのentityを素通りする（agents Mapのkeysを回すため）
   world.spawn({ id: 'intruder-1', faction: 'intruder', x, y, heading: 0, agent: {} });
 
@@ -197,9 +197,9 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi, createProjec
   console.log('OK: second episode after reset() runs correctly from spawn positions');
 }
 
-async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi, createProjection }) {
+async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi, createOriginProjection }) {
   // 防御艇を侵入艇の近く（INTERCEPT_RANGE_M=60m以内）に置き、1歩目で'defended'を強制する
-  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4 }); // protectedAsset無し=breach判定はスキップされる
+  const world = new World({ scene: minimalScene({ createOriginProjection }), capacity: 4 }); // protectedAsset無し=breach判定はスキップされる
   world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0, agent: {} });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
@@ -230,11 +230,11 @@ async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi, cr
   console.log('OK: dead (alive=0) intruder ignores supplied actions and stays put');
 }
 
-async function testStepAfterDoneIsIdempotent({ World, EnvApi, createProjection }) {
+async function testStepAfterDoneIsIdempotent({ World, EnvApi, createOriginProjection }) {
   // done後、reset()を挟まずstep()を呼び続けるケース（swarm-simの描画ループがdoneを
   // 見ずに毎フレームstep()を呼ぶ想定）で、episode_end行が複製されず、Worldの状態も
   // 進まないことを確認する（コードレビュー指摘: B-6再発の回帰テスト）。
-  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4 });
+  const world = new World({ scene: minimalScene({ createOriginProjection }), capacity: 4 });
   world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0 });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
@@ -271,8 +271,8 @@ async function testStepAfterDoneIsIdempotent({ World, EnvApi, createProjection }
   console.log('OK: step() after done is idempotent (single episode_end row, world state frozen until reset())');
 }
 
-async function testTimeoutOutcome({ World, EnvApi, missionMod, createProjection }) {
-  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4 });
+async function testTimeoutOutcome({ World, EnvApi, missionMod, createOriginProjection }) {
+  const world = new World({ scene: minimalScene({ createOriginProjection }), capacity: 4 });
   // 互いに遠く離して配置し、actionも与えないので誰も動かない -> timeout一択
   world.spawn({ id: 'defender-1', faction: 'defender', x: -1000, y: -1000, heading: 0 });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 1000, y: 1000, heading: 0 });
@@ -294,10 +294,10 @@ async function testTimeoutOutcome({ World, EnvApi, missionMod, createProjection 
   console.log(`OK: stationary episode times out after clock=${world.clock.toFixed(1)}s (outcome=timeout)`);
 }
 
-async function testLoggerStress({ World, EnvApi, createProjection }) {
+async function testLoggerStress({ World, EnvApi, createOriginProjection }) {
   const BOATS = 30;
   const STEPS = 2000;
-  const world = new World({ scene: minimalScene({ createProjection }), capacity: BOATS });
+  const world = new World({ scene: minimalScene({ createOriginProjection }), capacity: BOATS });
   const ids = [];
   for (let n = 0; n < BOATS; n++) {
     const id = `intruder-${n}`; // 全艇同陣営にして捕捉判定を起こさせず、純粋にログ量だけ見る
