@@ -3,13 +3,15 @@
  */
 
 import { SensorBase } from './sensor_base.js';
-import { localToLatLon } from '../../coord.js';
 
 export class GnssSensor extends SensorBase {
   observe(world, entityId) {
     const i = world.state.indexOf(entityId);
     if (i < 0) return null;
-    const { lat, lon } = localToLatLon(world.state.x[i], world.state.y[i]);
+    // A-7/E-6対応: coord.jsのモジュールグローバルoriginではなく、このworld自身の
+    // scene.projection（シーンごとに独立）を使う。これで別originの世界が並行して
+    // 存在してもGNSS変換が互いに干渉しない。
+    const { lat, lon } = world.scene.projection.localToLatLon(world.state.x[i], world.state.y[i]);
     return {
       type: 'gnss',
       lat,

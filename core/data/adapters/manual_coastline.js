@@ -11,7 +11,7 @@ import { createSceneGeometry } from '../../scene/scene_format.js';
 
 export class ManualCoastlineAdapter extends StaticGeometryAdapter {
   /**
-   * @param {{name: string, originLatLon: {lat: number, lon: number}, coastlineLatLon: Array<{lat: number, lon: number}>, obstacles?: Array<any>}} config
+   * @param {{name: string, originLatLon: {lat: number, lon: number}, coastlineLatLon: Array<{lat: number, lon: number}>, spawnsAreaLatLon?: Array<{lat: number, lon: number}>, landmarkSet?: string}} config
    */
   constructor(config) {
     super();
@@ -20,11 +20,14 @@ export class ManualCoastlineAdapter extends StaticGeometryAdapter {
 
   async load() {
     // TODO: 実データ（S-100/PLATEAU等）に差し替える場合はここを別アダプターとして実装する
+    // レビューA-9対応: spawnsAreaLatLon を渡し忘れていたため、boundsに運用エリアが
+    // 反映されずspawnがbounds外に出る不具合があった。ここで確実に素通しする。
     return createSceneGeometry({
       name: this.config.name,
       originLatLon: this.config.originLatLon,
       coastlineLatLon: this.config.coastlineLatLon,
-      obstacles: this.config.obstacles ?? [],
+      spawnsAreaLatLon: this.config.spawnsAreaLatLon,
+      landmarkSet: this.config.landmarkSet,
     });
   }
 }

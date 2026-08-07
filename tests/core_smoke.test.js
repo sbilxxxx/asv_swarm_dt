@@ -10,7 +10,7 @@
  * 制約が増えるため、あえてCommonJSのまま `await import()` でcore側のESMを
  * 動的ロードする（トップレベルawaitはCJSで使えないため、全体をasync main()に包む）。
  *
- * 確認する内容（docs/review-findings-2026-08-07.md A-6 / A-8 / B-6 対応の回帰テスト）:
+ * 確認する内容（docs/review-findings-2026-08-07.md A-6 / A-7 / A-8 / B-6 対応の回帰テスト）:
  *   1. reset()後にspawn位置へ戻ること（旧バグ: 移動後も(260.6,-264.9)のまま戻らなかった）
  *   2. 1エピソードがdoneまで走ること（'breached' / 'defended' / 'timeout' の3パターン）
  *   3. reset()後の2エピソード目も正しく走ること
@@ -20,6 +20,9 @@
  *      'defended'と'breached'の両方が実際に起こること（優先度4フォローアップ: 防御側の
  *      lead pursuitと侵入側のエピソード別迂回を入れる前は、等速の純追跡が幾何学的に
  *      間合いを詰め切れず毎回'breached'で決定論的に終わっていた）
+ *   7. 別originの2つ目のシーンを生成しても、先に作った1つ目のワールドのGNSS変換が
+ *      壊れないこと（A-7/E-6の回帰: 旧coord.jsはモジュールグローバルoriginを持っており、
+ *      実測で既存ワールドのGNSSが(35.45,139.75)→(34.00,133.50)へ化けるバグがあった）
  */
 'use strict';
 
@@ -37,22 +40,27 @@ async function loadCore() {
   const { World } = await import('../core/sim/world.js');
   const { EnvApi } = await import('../core/env/env_api.js');
   const missionMod = await import('../core/sim/mission.js');
-  const { createSceneGeometry } = await import('../core/scene/scene_format.js');
-  const { latLonToLocal } = await import('../core/coord.js');
+  const { loadSceneFromScenario } = await import('../core/data/adapters/index.js');
+  const { createProjection } = await import('../core/coord.js');
   const { LlmAgent } = await import('../core/sim/agents/llm_agent.js');
-  return { World, EnvApi, missionMod, createSceneGeometry, latLonToLocal, LlmAgent };
+  return { World, EnvApi, missionMod, loadSceneFromScenario, createProjection, LlmAgent };
+}
+
+/** scene:{} だけでは動かないテスト（GnssSensorがworld.scene.projectionを見るため）向けの最小scene */
+function minimalScene({ createProjection }, originLatLon = { lat: 35.45, lon: 139.75 }) {
+  return { projection: createProjection(originLatLon) };
 }
 
 /** 実シナリオファイルからWorldを構築する（core自身はfetchできないため、テスト側でJSONを読む） */
-function buildScenarioWorld({ World, createSceneGeometry, latLonToLocal }) {
+async function buildScenarioWorld({ World, loadSceneFromScenario }) {
   const scenarioPath = path.join(__dirname, '../core/scenarios/tokyo_bay_minimal.json');
   const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
-  const scene = createSceneGeometry(scenario); // 内部でcoord.jsのoriginをこのシナリオへ設定する
+  const scene = await loadSceneFromScenario(scenario); // scene.projectionがこのシナリオ専用のorigin変換を持つ
 
   const world = new World({ scene, capacity: scenario.spawns.length });
   const spawnLocal = [];
   for (const s of scenario.spawns) {
-    const { x, y } = latLonToLocal(s.lat, s.lon);
+    const { x, y } = scene.projection.latLonToLocal(s.lat, s.lon);
     const heading = (s.headingDeg * Math.PI) / 180;
     world.spawn({ id: s.id, faction: s.faction, platform: s.platform, x, y, heading });
     spawnLocal.push({ id: s.id, x, y, heading });
@@ -64,17 +72,17 @@ function buildScenarioWorld({ World, createSceneGeometry, latLonToLocal }) {
  * 実シナリオ＋protectedAsset＋LlmAgent（既定=rule_based_fallback.js）でWorldを構築する。
  * swarm-sim/main.js の初期化と同じ組み方（agentを渡してdecide()を実際に回せるようにする）。
  */
-function buildScenarioWorldWithAgents({ World, createSceneGeometry, latLonToLocal, LlmAgent }) {
+async function buildScenarioWorldWithAgents({ World, loadSceneFromScenario, LlmAgent }) {
   const scenarioPath = path.join(__dirname, '../core/scenarios/tokyo_bay_minimal.json');
   const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
-  const scene = createSceneGeometry(scenario);
+  const scene = await loadSceneFromScenario(scenario);
   const protectedAsset = scenario.protectedAssetLatLon
-    ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+    ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
     : null;
 
   const world = new World({ scene, capacity: scenario.spawns.length, protectedAsset });
   for (const s of scenario.spawns) {
-    const { x, y } = latLonToLocal(s.lat, s.lon);
+    const { x, y } = scene.projection.latLonToLocal(s.lat, s.lon);
     world.spawn({
       id: s.id,
       faction: s.faction,
@@ -112,8 +120,8 @@ async function runOneEpisode(world, env, meta) {
   return result;
 }
 
-async function testResetReturnsToSpawn({ World, EnvApi, createSceneGeometry, latLonToLocal }) {
-  const { world, spawnLocal } = buildScenarioWorld({ World, createSceneGeometry, latLonToLocal });
+async function testResetReturnsToSpawn({ World, EnvApi, loadSceneFromScenario }) {
+  const { world, spawnLocal } = await buildScenarioWorld({ World, loadSceneFromScenario });
   const env = new EnvApi(world, { dt: 0.1 });
 
   env.reset({ scenario: 'tokyo_bay_minimal', episodeIndex: 1 });
@@ -143,11 +151,11 @@ async function testResetReturnsToSpawn({ World, EnvApi, createSceneGeometry, lat
   console.log('OK: reset() restores spawn positions/heading/speed/alive after movement');
 }
 
-async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
+async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi, createProjection }) {
   // 侵入艇をprotectedAssetの真上にスポーンさせ、1歩目で'breached'を強制する
   const x = 100;
   const y = 200;
-  const world = new World({ scene: {}, capacity: 4, protectedAsset: { x, y } });
+  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4, protectedAsset: { x, y } });
   // agentを登録しないとEnvApi._observationForAll()がこのentityを素通りする（agents Mapのkeysを回すため）
   world.spawn({ id: 'intruder-1', faction: 'intruder', x, y, heading: 0, agent: {} });
 
@@ -189,9 +197,9 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
   console.log('OK: second episode after reset() runs correctly from spawn positions');
 }
 
-async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi }) {
+async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi, createProjection }) {
   // 防御艇を侵入艇の近く（INTERCEPT_RANGE_M=60m以内）に置き、1歩目で'defended'を強制する
-  const world = new World({ scene: {}, capacity: 4 }); // protectedAsset無し=breach判定はスキップされる
+  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4 }); // protectedAsset無し=breach判定はスキップされる
   world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0, agent: {} });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
@@ -222,11 +230,11 @@ async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi }) 
   console.log('OK: dead (alive=0) intruder ignores supplied actions and stays put');
 }
 
-async function testStepAfterDoneIsIdempotent({ World, EnvApi }) {
+async function testStepAfterDoneIsIdempotent({ World, EnvApi, createProjection }) {
   // done後、reset()を挟まずstep()を呼び続けるケース（swarm-simの描画ループがdoneを
   // 見ずに毎フレームstep()を呼ぶ想定）で、episode_end行が複製されず、Worldの状態も
   // 進まないことを確認する（コードレビュー指摘: B-6再発の回帰テスト）。
-  const world = new World({ scene: {}, capacity: 4 });
+  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4 });
   world.spawn({ id: 'defender-1', faction: 'defender', x: 0, y: 0, heading: 0 });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
@@ -263,8 +271,8 @@ async function testStepAfterDoneIsIdempotent({ World, EnvApi }) {
   console.log('OK: step() after done is idempotent (single episode_end row, world state frozen until reset())');
 }
 
-async function testTimeoutOutcome({ World, EnvApi, missionMod }) {
-  const world = new World({ scene: {}, capacity: 4 });
+async function testTimeoutOutcome({ World, EnvApi, missionMod, createProjection }) {
+  const world = new World({ scene: minimalScene({ createProjection }), capacity: 4 });
   // 互いに遠く離して配置し、actionも与えないので誰も動かない -> timeout一択
   world.spawn({ id: 'defender-1', faction: 'defender', x: -1000, y: -1000, heading: 0 });
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 1000, y: 1000, heading: 0 });
@@ -286,10 +294,10 @@ async function testTimeoutOutcome({ World, EnvApi, missionMod }) {
   console.log(`OK: stationary episode times out after clock=${world.clock.toFixed(1)}s (outcome=timeout)`);
 }
 
-async function testLoggerStress({ World, EnvApi }) {
+async function testLoggerStress({ World, EnvApi, createProjection }) {
   const BOATS = 30;
   const STEPS = 2000;
-  const world = new World({ scene: {}, capacity: BOATS });
+  const world = new World({ scene: minimalScene({ createProjection }), capacity: BOATS });
   const ids = [];
   for (let n = 0; n < BOATS; n++) {
     const id = `intruder-${n}`; // 全艇同陣営にして捕捉判定を起こさせず、純粋にログ量だけ見る
@@ -329,8 +337,8 @@ async function testLoggerStress({ World, EnvApi }) {
  * 侵入側のエピソード別迂回（observation.episode由来）を入れたことで、決定論のまま
  * エピソードごとに違う展開・違う結果になることをここで固定する。
  */
-async function testMultiEpisodeOutcomeVariety({ World, EnvApi, createSceneGeometry, latLonToLocal, LlmAgent }) {
-  const { world, scenario } = buildScenarioWorldWithAgents({ World, createSceneGeometry, latLonToLocal, LlmAgent });
+async function testMultiEpisodeOutcomeVariety({ World, EnvApi, loadSceneFromScenario, LlmAgent }) {
+  const { world, scenario } = await buildScenarioWorldWithAgents({ World, loadSceneFromScenario, LlmAgent });
   const env = new EnvApi(world, { dt: 0.1 });
 
   const NUM_EPISODES = 6;
@@ -351,6 +359,65 @@ async function testMultiEpisodeOutcomeVariety({ World, EnvApi, createSceneGeomet
   console.log(`OK: ${NUM_EPISODES} consecutive episodes produced both defended and breached: [${outcomes.join(', ')}]`);
 }
 
+/**
+ * A-7/E-6の回帰テスト。レビューが実測した不具合を再現する:
+ * 「別originのシナリオでcreateSceneGeometry()を呼ぶと、既存ワールドのGNSSが変わってしまう」
+ * （旧coord.jsのモジュールグローバルoriginのせい。実測: (35.45,139.75)→(34.00,133.50)）。
+ * 現在はSceneGeometryごとに独立したprojectionを持つため、2つ目のシーン/Worldを作っても
+ * 1つ目のWorldのGNSS出力は変化しないはずである。
+ */
+async function testCoordProjectionIsolatedPerScene({ World, loadSceneFromScenario }) {
+  const squareAround = (originLatLon, halfDeg = 0.01) => [
+    { lat: originLatLon.lat + halfDeg, lon: originLatLon.lon - halfDeg },
+    { lat: originLatLon.lat + halfDeg, lon: originLatLon.lon + halfDeg },
+    { lat: originLatLon.lat - halfDeg, lon: originLatLon.lon + halfDeg },
+    { lat: originLatLon.lat - halfDeg, lon: originLatLon.lon - halfDeg },
+  ];
+
+  const originA = { lat: 35.45, lon: 139.75 }; // レビュー実測時の1つ目のシナリオorigin
+  const originB = { lat: 34.0, lon: 133.5 }; // レビュー実測時の2つ目のシナリオorigin（この切替でAが化けた）
+
+  const sceneA = await loadSceneFromScenario({
+    name: 'origin-a',
+    adapter: 'manual_coastline',
+    originLatLon: originA,
+    coastlineLatLon: squareAround(originA),
+  });
+  const worldA = new World({ scene: sceneA, capacity: 2 });
+  worldA.spawn({ id: 'boat-a', faction: 'defender', x: 500, y: 300, heading: 0 });
+
+  const gnssBefore = worldA.observe('boat-a', 'gnss');
+
+  // ここで別originの2つ目のシーン/Worldを生成する。旧実装ではcoord.jsのグローバルoriginが
+  // ここで書き換わり、worldAのGNSS変換まで巻き込んで壊れていた。
+  const sceneB = await loadSceneFromScenario({
+    name: 'origin-b',
+    adapter: 'manual_coastline',
+    originLatLon: originB,
+    coastlineLatLon: squareAround(originB),
+  });
+  const worldB = new World({ scene: sceneB, capacity: 2 });
+  worldB.spawn({ id: 'boat-b', faction: 'defender', x: 0, y: 0, heading: 0 });
+
+  const gnssAfter = worldA.observe('boat-a', 'gnss');
+  approxEqual(gnssAfter.lat, gnssBefore.lat, 1e-9, 'worldA GNSS lat must be unaffected by worldB creation');
+  approxEqual(gnssAfter.lon, gnssBefore.lon, 1e-9, 'worldA GNSS lon must be unaffected by worldB creation');
+  assert.ok(
+    Math.abs(gnssAfter.lat - originA.lat) < 1,
+    `worldA GNSS should stay near its own origin (${originA.lat}), got ${gnssAfter.lat} (old bug moved it toward ${originB.lat})`
+  );
+
+  // worldBは自分自身のoriginを反映していること（worldAのoriginへ引きずられていないこと）
+  const gnssB = worldB.observe('boat-b', 'gnss');
+  approxEqual(gnssB.lat, originB.lat, 1e-6, 'worldB GNSS lat should equal its own origin at (0,0)');
+  approxEqual(gnssB.lon, originB.lon, 1e-6, 'worldB GNSS lon should equal its own origin at (0,0)');
+
+  console.log(
+    'OK: two scenes with different origins keep independent GNSS conversions ' +
+      `(worldA stayed at lat≈${gnssAfter.lat.toFixed(4)}, worldB at lat≈${gnssB.lat.toFixed(4)}) (A-7/E-6 regression)`
+  );
+}
+
 async function main() {
   const core = await loadCore();
   await testResetReturnsToSpawn(core);
@@ -360,6 +427,7 @@ async function main() {
   await testTimeoutOutcome(core);
   await testLoggerStress(core);
   await testMultiEpisodeOutcomeVariety(core);
+  await testCoordProjectionIsolatedPerScene(core);
   console.log('\nAll core smoke tests passed.');
 }
 
