@@ -172,37 +172,162 @@ export const SHIP_VISUAL_SCALE = 2.2;
 export const SHIP_DECK_HEIGHT = 0.3 * SHIP_VISUAL_SCALE;
 
 /**
- * 船体形状。ジオメトリ側で向きを正規化し、船グループは
- * 「+X が船首、+Y が上、±Z が舷側」という素直な座標系で扱えるようにする。
+ * 船体形状（品質向上計画 優先度3・本命）。
  *
- * 以前はグループに rotation.x = π/2 を掛けたまま子要素を配置していたため、
- * 上下と前後の軸が入れ替わり、航跡が垂直の光柱になる不具合を生んでいた。
- * ここで正規化しておけば、rotation.y = 針路 / rotation.x = ピッチ / rotation.z = ロール
- * がそのまま使える。
+ * 以前は単一の平面形状（Shape）をExtrudeGeometryで一様に押し出すだけだったため、
+ * 断面が船首から船尾まで変化せず「箱」にしか見えなかった（1隻437頂点）。
+ * ここでは船首〜船尾を9つの制御断面（CONTROL）で定義し、断面を滑らかに補間しながら
+ * STATION_COUNT個の輪切りをロフト（積層）して船体を組み立てる。
+ *
+ * 座標系はここで直接「+X が船首、+Y が上、±Z が舷側」で組み立てる
+ * （以前のようにY-Z平面で作ってから rotateX/rotateY で正規化する手順は踏まない）。
+ * rotation.y = 針路 / rotation.x = ピッチ / rotation.z = ロール がそのまま使える点は従来通り。
+ *
+ * 喫水線の塗り分け: 各断面の「チャイン」（ビルジが最も張り出す点）の高さを
+ * 喫水線（SHIP_DECK_HEIGHTの符号反転＝水面が来る高さ）に固定してあるため、
+ * チャインを境に「下半分＝防汚色」「上半分＝船体色」で完全に継ぎ目なく2メッシュに分割できる
+ * （高さの補間が要らない＝ズレようがない）。
+ *
+ * @returns {{ above: THREE.BufferGeometry, below: THREE.BufferGeometry }}
  */
-function buildHullGeometry() {
+// 制御断面: x=船首尾方向位置, hbC=喫水線(チャイン)での半幅, hbD=甲板端での半幅,
+// deckY=甲板高さ, keelY=キール高さ（すべてSHIP_VISUAL_SCALE単位、原点は船体中心付近）。
+// buildHullGeometries()（ロフト生成）と hullProfileAtX()（デッキ部品を船体に密着させる位置決め）の
+// 両方から参照する単一の情報源。
+const HULL_CONTROL = [
+  { x: -3.1, hbC: 1.1, hbD: 1.1, deckY: 0.35, keelY: -0.72 }, // 船尾（角型トランサム＝甲板幅とチャイン幅が同じ＝側面が垂直）
+  { x: -2.3, hbC: 1.28, hbD: 1.05, deckY: 0.42, keelY: -0.9 },
+  { x: -1.1, hbC: 1.36, hbD: 1.12, deckY: 0.48, keelY: -0.98 },
+  { x: 0.0, hbC: 1.38, hbD: 1.14, deckY: 0.5, keelY: -1.0 }, // 中央（最大幅・最深）
+  { x: 1.2, hbC: 1.26, hbD: 1.06, deckY: 0.58, keelY: -0.82 },
+  { x: 2.15, hbC: 0.92, hbD: 0.78, deckY: 0.68, keelY: -0.55 },
+  { x: 2.9, hbC: 0.48, hbD: 0.4, deckY: 0.8, keelY: -0.3 }, // 鋭く浅い船首の肩
+  { x: 3.4, hbC: 0.13, hbD: 0.11, deckY: 0.9, keelY: -0.12 },
+  { x: 3.6, hbC: 0.0, hbD: 0.0, deckY: 0.96, keelY: -0.02 }, // 船首材（幅0＝先端）
+];
+
+/**
+ * 船体中心線上のX位置（s単位）における甲板・キール高さ等を補間して返す。
+ * デッキハウス・マスト等の部品を、新しい船体形状の甲板ラインにきちんと密着させるために使う
+ * （旧・単一断面のExtrudeGeometryと違い、断面が船首尾で変化するため固定値では合わなくなった）。
+ */
+function hullProfileAtX(xInS) {
+  const clamped = Math.max(HULL_CONTROL[0].x, Math.min(HULL_CONTROL[HULL_CONTROL.length - 1].x, xInS));
+  let i0 = 0;
+  while (i0 < HULL_CONTROL.length - 2 && HULL_CONTROL[i0 + 1].x < clamped) i0++;
+  const a = HULL_CONTROL[i0];
+  const b = HULL_CONTROL[i0 + 1];
+  const f = (clamped - a.x) / (b.x - a.x || 1);
+  const lerp = (k) => a[k] + (b[k] - a[k]) * f;
+  return { hbC: lerp('hbC'), hbD: lerp('hbD'), deckY: lerp('deckY'), keelY: lerp('keelY') };
+}
+
+function buildHullGeometries() {
   const s = SHIP_VISUAL_SCALE;
-  const shape = new THREE.Shape();
-  shape.moveTo(0, 3.6 * s);
-  shape.lineTo(1.05 * s, 1.9 * s);
-  shape.lineTo(1.25 * s, -1.9 * s);
-  shape.lineTo(0.85 * s, -3.1 * s);
-  shape.lineTo(-0.85 * s, -3.1 * s);
-  shape.lineTo(-1.25 * s, -1.9 * s);
-  shape.lineTo(-1.05 * s, 1.9 * s);
-  shape.closePath();
-  const geo = new THREE.ExtrudeGeometry(shape, {
-    depth: 1.0 * s,
-    bevelEnabled: true,
-    bevelThickness: 0.18 * s,
-    bevelSize: 0.18 * s,
-    bevelSegments: 1,
-  });
-  geo.translate(0, 0, -0.5 * s); // 押し出し方向の中心を原点へ
-  // 押し出し直後は「+Y=船首 / +Z=船体厚み」。これを「+X=船首 / +Y=上」へ正規化する
-  geo.rotateX(-Math.PI / 2);
-  geo.rotateY(-Math.PI / 2);
-  return geo;
+  // チャイン（＝色の境目）は物理喫水線ちょうどではなく、わずかに上に置く。
+  // 実測: ちょうど水面高さに置くと、波の起伏・カメラ角度次第で防汚色が水面下に隠れきってしまい
+  // 「喫水線の塗り分け」がほぼ常時見えないという結果になった。実船のボートトッピング帯と同様、
+  // 常時わずかに水面上へ露出させることで塗り分けが実際に視認できるようにする。
+  const waterlineY = -SHIP_DECK_HEIGHT / s + 0.16;
+
+  // 断面数。多いほど滑らかになり頂点数も増える（目標: 3,000〜5,000頂点/隻。実測はqa-shots.jsで確認）
+  const STATION_COUNT = 60;
+
+  function sampleControl(t) {
+    const idxF = t * (HULL_CONTROL.length - 1);
+    const i0 = Math.min(Math.floor(idxF), HULL_CONTROL.length - 2);
+    const i1 = i0 + 1;
+    const f = idxF - i0;
+    const a = HULL_CONTROL[i0];
+    const b = HULL_CONTROL[i1];
+    const lerp = (k) => a[k] + (b[k] - a[k]) * f;
+    return { x: lerp('x'), hbC: lerp('hbC'), hbD: lerp('hbD'), deckY: lerp('deckY'), keelY: lerp('keelY') };
+  }
+
+  // 断面リング（9点、中心線について左右対称）。
+  // p0 甲板右舷 → p1 上部フレア右舷 → p2 チャイン右舷(=喫水線) → p3 ビルジ右舷 → p4 キール
+  // → p5 ビルジ左舷 → p6 チャイン左舷(=喫水線) → p7 上部フレア左舷 → p8 甲板左舷
+  function ringPoints(st) {
+    const { hbC, hbD, deckY, keelY } = st;
+    const flareY = (deckY + waterlineY) / 2;
+    const flareZ = (hbD + hbC) / 2;
+    const bilgeY = (waterlineY + keelY) / 2;
+    const bilgeZ = hbC / 2;
+    return [
+      { y: deckY, z: hbD },
+      { y: flareY, z: flareZ },
+      { y: waterlineY, z: hbC },
+      { y: bilgeY, z: bilgeZ },
+      { y: keelY, z: 0 },
+      { y: bilgeY, z: -bilgeZ },
+      { y: waterlineY, z: -hbC },
+      { y: flareY, z: -flareZ },
+      { y: deckY, z: -hbD },
+    ];
+  }
+
+  const stations = [];
+  for (let i = 0; i < STATION_COUNT; i++) {
+    const t = i / (STATION_COUNT - 1);
+    const st = sampleControl(t);
+    stations.push({ x: st.x * s, ring: ringPoints(st).map((p) => ({ y: p.y * s, z: p.z * s })) });
+  }
+
+  // 非インデックス（三角形ごとに頂点を複製）で構築する。理由:
+  // (a) 面ごとに正しい平面法線が付き、小型艇のハードチャイン船体らしい面取りされた質感になる
+  // (b) 既存のBox/ExtrudeGeometryも同じ理由で内部的に頂点を複製しており、シーン全体のスタイルが揃う
+  const belowPos = [];
+  const abovePos = [];
+
+  function pushTri(arr, p0, p1, p2) {
+    arr.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+  }
+  // a→b→c→d の順で辺を構成する四角形を三角形2枚に分割して積む
+  function pushQuad(arr, a, b, c, d) {
+    pushTri(arr, a, b, c);
+    pushTri(arr, a, c, d);
+  }
+  const at = (st, idx) => ({ x: st.x, y: st.ring[idx].y, z: st.ring[idx].z });
+
+  for (let i = 0; i < STATION_COUNT - 1; i++) {
+    const s0 = stations[i];
+    const s1 = stations[i + 1];
+    // 船体外殻・下半分（p2〜p6＝チャインからキールを回って反対舷のチャインまで）→防汚色メッシュ
+    for (let k = 2; k < 6; k++) {
+      pushQuad(belowPos, at(s0, k), at(s1, k), at(s1, k + 1), at(s0, k + 1));
+    }
+    // 船体外殻・上半分（p0〜p2, p6〜p8＝甲板端からチャインまで）→船体色メッシュ
+    for (let k = 0; k < 2; k++) {
+      pushQuad(abovePos, at(s0, k), at(s1, k), at(s1, k + 1), at(s0, k + 1));
+    }
+    for (let k = 6; k < 8; k++) {
+      pushQuad(abovePos, at(s0, k), at(s1, k), at(s1, k + 1), at(s0, k + 1));
+    }
+    // 甲板（p0-p8を直結する平らな蓋）→船体色メッシュ側に含める
+    pushQuad(abovePos, at(s0, 0), at(s1, 0), at(s1, 8), at(s0, 8));
+  }
+
+  // 船尾トランサム（最も-Xの断面をそのまま平面で塞ぐ）。キールから扇状に三角形分割する。
+  {
+    const st0 = stations[0];
+    const keel = at(st0, 4);
+    pushTri(belowPos, keel, at(st0, 3), at(st0, 2));
+    pushTri(belowPos, keel, at(st0, 6), at(st0, 5));
+    pushTri(abovePos, keel, at(st0, 2), at(st0, 1));
+    pushTri(abovePos, keel, at(st0, 1), at(st0, 0));
+    pushTri(abovePos, keel, at(st0, 0), at(st0, 8));
+    pushTri(abovePos, keel, at(st0, 8), at(st0, 7));
+    pushTri(abovePos, keel, at(st0, 7), at(st0, 6));
+  }
+
+  function toGeometry(posArray) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  return { above: toGeometry(abovePos), below: toGeometry(belowPos) };
 }
 
 /**
@@ -341,7 +466,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
   land.receiveShadow = true;
   scene3d.add(land);
 
-  const hullGeometry = buildHullGeometry();
+  const hullGeometries = buildHullGeometries();
   const deckMaterial = new THREE.MeshStandardMaterial({ color: 0xe7ecec, roughness: 0.6 });
   const wakeTexture = createWakeTexture();
 
@@ -359,14 +484,42 @@ export function buildThreeScene(canvas, scene, options = {}) {
     group.name = `ship-${id}`; // devtools計測用（qa-shots.jsが船体だけの頂点数を分離するために使う）
     group.rotation.order = 'YXZ'; // ヨー(針路) → ピッチ → ロール の順で適用する
 
-    const hull = new THREE.Mesh(hullGeometry, new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.4, metalness: 0.1 }));
+    // 船体は喫水線で2メッシュに分割（品質向上計画 優先度3）。DoubleSideなのは、
+    // ロフトの三角形巻き順を手作業で毎面検証する代わりに両面描画で確実に穴を防ぐ判断
+    // （小型艇1隻あたりの追加コストは無視できる）。
+    const hull = new THREE.Mesh(
+      hullGeometries.above,
+      new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide })
+    );
     hull.castShadow = true;
     hull.receiveShadow = true;
     group.add(hull);
 
-    // 操舵室（ブリッジ）。カメラの搭載位置に対応する
+    // 喫水線下＝防汚塗料（赤茶）。実船は水線下が別色というだけで「船らしさ」が大きく上がる一手。
+    // わずかなemissiveを足しているのは、この帯がチャイン直下という太陽光に対して浅い角度になりやすい
+    // 場所にあり、通常のMeshStandardMaterialの陰影だけだと実測でほぼ黒つぶれして見えなかったため
+    // （見た目上の可視性を優先した割り切り。物理的な正しさより「塗り分けが実際に見える」ことを取る）。
+    const hullBelow = new THREE.Mesh(
+      hullGeometries.below,
+      new THREE.MeshStandardMaterial({
+        color: 0xb3502e,
+        roughness: 0.75,
+        metalness: 0.0,
+        emissive: 0x431408,
+        emissiveIntensity: 1.0,
+        side: THREE.DoubleSide,
+      })
+    );
+    hullBelow.castShadow = true;
+    hullBelow.receiveShadow = true;
+    group.add(hullBelow);
+
+    // 操舵室（ブリッジ）。カメラの搭載位置に対応する。新しい船体の甲板ラインに合わせて高さを決める
+    // （旧・単一断面の船体では固定値で足りていたが、船首尾で甲板高さが変わるため位置決め計算が必要）。
+    const bridgeX = -0.55 * s;
+    const bridgeDeckY = hullProfileAtX(bridgeX / s).deckY * s;
     const deck = new THREE.Mesh(new THREE.BoxGeometry(1.0 * s, 0.9 * s, 1.1 * s), deckMaterial);
-    deck.position.set(-0.55 * s, 0.85 * s, 0);
+    deck.position.set(bridgeX, bridgeDeckY + 0.45 * s, 0);
     deck.castShadow = true;
     group.add(deck);
 
@@ -375,35 +528,41 @@ export function buildThreeScene(canvas, scene, options = {}) {
       new THREE.BoxGeometry(0.08 * s, 0.32 * s, 0.95 * s),
       new THREE.MeshStandardMaterial({ color: 0x17323f, roughness: 0.25, metalness: 0.4 })
     );
-    windshield.position.set(-0.12 * s, 0.95 * s, 0);
+    windshield.position.set(-0.12 * s, bridgeDeckY + 0.55 * s, 0);
     group.add(windshield);
 
-    // センサーマスト＋ドーム: ASVが観測機器を積んでいることを示す装飾（レーダー/カメラの実体ではない）
+    // センサーマスト＋ドーム: ASVが観測機器を積んでいることを示す装飾（レーダー/カメラの実体ではない）。
+    // 分割数を6→14/10→20・6→14に増やし（品質向上計画1.5節）、六角柱・多面体っぽさを解消する。
+    const mastX = -0.75 * s;
+    const mastBaseY = hullProfileAtX(mastX / s).deckY * s + 0.9 * s; // ブリッジ屋根の上に立てる
     const mastMat = new THREE.MeshStandardMaterial({ color: 0xd7dede, roughness: 0.5 });
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * s, 0.08 * s, 1.1 * s, 6), mastMat);
-    mast.position.set(-0.75 * s, 1.75 * s, 0);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * s, 0.08 * s, 1.1 * s, 14), mastMat);
+    mast.position.set(mastX, mastBaseY, 0);
     group.add(mast);
     const sensorDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.24 * s, 10, 6, 0, Math.PI * 2, 0, Math.PI / 1.7),
+      new THREE.SphereGeometry(0.24 * s, 20, 14, 0, Math.PI * 2, 0, Math.PI / 1.7),
       new THREE.MeshStandardMaterial({ color: 0xf2f5f5, roughness: 0.3 })
     );
-    sensorDome.position.set(-0.75 * s, 2.3 * s, 0);
+    sensorDome.position.set(mastX, mastBaseY + 0.55 * s, 0);
     group.add(sensorDome);
 
-    // 陣営識別ストライプ（青=防御 / 赤=侵入）。船体側面に入れて遠目でも所属が分かるようにする
+    // 陣営識別ストライプ（青=防御 / 赤=侵入）。喫水線のすぐ上、船体色帯の中央あたりに帯びさせる
+    const stripeX = 0.1 * s;
+    const stripeProfile = hullProfileAtX(stripeX / s);
+    const stripeY = ((-SHIP_DECK_HEIGHT / s + stripeProfile.deckY) / 2) * s; // 喫水線と甲板の中間高さ
     const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(5.2 * s, 0.22 * s, 2.62 * s),
+      new THREE.BoxGeometry(5.2 * s, 0.22 * s, stripeProfile.hbC * s * 2.05),
       new THREE.MeshStandardMaterial({ color: lightColor, roughness: 0.5 })
     );
-    stripe.position.set(0.1 * s, 0.42 * s, 0);
+    stripe.position.set(stripeX, stripeY, 0);
     group.add(stripe);
 
-    // 航海灯: 遠距離でも視認できる小さな発光点（実際の航海灯の役割も兼ねる）
+    // 航海灯: 遠距離でも視認できる小さな発光点（実際の航海灯の役割も兼ねる）。分割数を8→16に増やす。
     const navLight = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28 * s, 8, 8),
+      new THREE.SphereGeometry(0.28 * s, 16, 16),
       new THREE.MeshStandardMaterial({ color: lightColor, emissive: lightColor, emissiveIntensity: 2.4 })
     );
-    navLight.position.set(-0.75 * s, 2.75 * s, 0);
+    navLight.position.set(mastX, mastBaseY + 1.0 * s, 0);
     group.add(navLight);
 
     // 加算合成で「光る航跡」にする（参考にした操船シミュレータのwakeスプライトと同じ狙い）
