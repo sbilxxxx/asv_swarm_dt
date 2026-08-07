@@ -107,6 +107,18 @@ function normalizeAngle(rad) {
   return Math.atan2(Math.sin(rad), Math.cos(rad));
 }
 
+/**
+ * E-3対応: GNSSセンサーの生値（gnss.jsの数学規約＝東0°・反時計回り正）を、
+ * 表示専用のコンパス規約（北0°・時計回り正・[0,360)）へ変換する。
+ * gnss.js自体のセンサー出力（steering/物理側が依存する数学規約）は変更しない。
+ * 変換式: compassDeg = (90 - mathDeg + 360) % 360
+ * @param {number} mathDeg - GnssSensor.observe()が返すheadingDeg（数学規約、範囲不定）
+ * @returns {number} 北基準・時計回り・[0,360)のコンパス方位（度）
+ */
+function toCompassHeadingDeg(mathDeg) {
+  return ((90 - mathDeg) % 360 + 360) % 360;
+}
+
 export function renderGnssPanel(reading) {
   const el = document.getElementById('gnss-readout');
   if (!el) return;
@@ -114,5 +126,6 @@ export function renderGnssPanel(reading) {
     el.textContent = '—';
     return;
   }
-  el.innerHTML = `${reading.lat.toFixed(5)}, ${reading.lon.toFixed(5)}<br>heading ${reading.headingDeg.toFixed(0)}°`;
+  const compassDeg = toCompassHeadingDeg(reading.headingDeg);
+  el.innerHTML = `${reading.lat.toFixed(5)}, ${reading.lon.toFixed(5)}<br>heading ${compassDeg.toFixed(0)}°`;
 }
