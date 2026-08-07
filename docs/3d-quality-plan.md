@@ -138,11 +138,19 @@ shadow.camera    = ±1,900m（3,800m四方をカバー）
 
 | # | 内容 | 工数 | 効果 | 状態 |
 |---|---|---|---|---|
-| 1 | 環境マップ導入 | 15分 | **大**（全マテリアルに効く） | 未着手 |
-| 2 | 影の範囲を船周辺に限定＋2048px | 15分 | 大（接地感） | 未着手 |
+| 1 | 環境マップ導入 | 15分 | **大**（全マテリアルに効く） | 対応済（2026-08-07） |
+| 2 | 影の範囲を船周辺に限定＋2048px | 15分 | 大（接地感） | 対応済（2026-08-07） |
 | 3 | **船体の多断面化＋喫水線塗り分け＋分割数増** | 1.5時間 | **最大**（主役が主役に見える） | 未着手 |
 | 4 | 海面LOD（近傍細かく・遠方粗く） | 1時間 | 中（波が実際に見える） | 未着手 |
 | 5 | 船首波・デッキ部品追加 | 1時間 | 中 | 未着手 |
+
+### 実装メモ（1・2, 2026-08-07）
+
+- **環境マップ**: `createSkyTexture()`（空グラデーション）を`EquirectangularReflectionMapping`として`PMREMGenerator.fromEquirectangular()`に通し`scene.environment`へ設定。追加テクスチャなし。
+- **影**: `sun.shadow.mapSize`を1024→2048、影カメラのボックスを±1900相当→±200（400m四方）に縮小し、`updateShips()`内で毎フレーム`updateShadowTarget()`を呼んでヒーロー艇の注視点（orbitTargetと同じ）に追従させるようにした。
+- **影のハマりどころ（実測で発見・解消済み）**: 当初「影専用の透明メッシュ（`THREE.ShadowMaterial`）を水面の少し上に重ねる」案で実装したが、**影が一切映らない**不具合が発生。`devtools/diag_shadow_*.js`（一時ファイル、作業後に削除）でrenderer.info・shadow map実テクセル・シーングラフ走査による実測を行い、原因は「船体（水面から見て上下にまたがる立体）と、固定高さに置いた平らな受け面が幾何学的に交差し、その交差域で深度比較が破綻していた」ことと判明。
+  - 正しい直し方は「水面メッシュ自身に影を受けさせる」こと。水面は自前の`ShaderMaterial`（波の頂点変位＋フレネル反射のカスタムシェーダー）なので、既存の`receiveShadow`は素通りする。Three.js組み込みのShaderChunk（`shadowmap_pars_vertex`/`shadowmap_vertex`/`shadowmap_pars_fragment`/`shadowmask_pars_fragment`）を`#include`し、`material.lights = true`＋`THREE.UniformsLib.lights`のマージ＋フラグメント側での`uniform bool receiveShadow;`明示宣言（レンダラーがオブジェクト単位でコンパイル済みプログラムへ直接setValueするため、宣言しないと「undeclared identifier」でコンパイルが落ちる）を行うことで解決。波の変位ジオメトリ・WAVE_TERMSには一切手を触れていない。
+  - 影は完全な黒ではなく`mix(0.55, 1.0, shadow)`で海色に沈める程度に留めた（実際の水面の影は真っ黒にならないため）。
 
 **1と2は合計30分で効果が大きい**ため、着手するならここから。**3が本命**。
 

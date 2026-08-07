@@ -41,7 +41,18 @@ function glslFloat(n) {
   return Number.isInteger(n) ? `${n}.0` : `${n}`;
 }
 
+// 品質向上計画 優先度2: 水面に船の影を落とす。
+// 別メッシュの「影受け板」を水面のどこかの高さに置く案は試したが、水面と船体（喫水線をまたいで
+// 上下に伸びる立体）の間に必ず干渉（受け面が船体の内部を通る）が生じ、
+// その干渉域で深度比較が破綻して影が消えるバグを実測で確認した
+// （page.evaluate()でshadow map実テクセル・シーングラフを直接ダンプして特定。詳細はdocs/3d-quality-plan.md参照）。
+// 正しい直し方は「水面自身に影を受けさせる」こと＝Three.jsの組み込みShaderChunkを
+// #include して、通常のMeshStandardMaterialが暗黙にやっている影サンプリングを
+// このカスタムシェーダーにも足す。ジオメトリ・波の計算（唯一の情報源）には一切触れていない。
 const WATER_VERTEX_SHADER = `
+  #include <common>
+  #include <shadowmap_pars_vertex>
+
   uniform float uTime;
   varying vec3 vWorldPos;
   varying float vWave;
@@ -55,13 +66,37 @@ ${WAVE_TERMS.map(
 ).join(' +\n')};
     pos.z += wave;
     vWave = wave;
-    vec4 worldPos = modelMatrix * vec4(pos, 1.0);
-    vWorldPos = worldPos.xyz;
+
+    // 影サンプリング用の座標を計算するため、Three.js組み込みチャンクが要求する変数名
+    // （transformedNormal / worldPosition）をこの規約に合わせて用意する。
+    // 波の傾き自体は正規化された法線に反映していない（フラグメント側でdFdx/dFdyから求める）ため、
+    // ここでの法線はジオメトリの平面法線（ほぼ真上）で十分（影の自己遮蔽バイアス計算にのみ使う）。
+    vec3 objectNormal = vec3(normal);
+    vec3 transformedNormal = normalMatrix * objectNormal;
+
+    vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
+    vWorldPos = worldPosition.xyz;
+
+    #include <shadowmap_vertex>
+
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
   }
 `;
 
 const WATER_FRAGMENT_SHADER = `
+  #include <common>
+  #include <packing>
+
+  // レンダラーがオブジェクト単位で毎フレーム書き込む特殊uniform（mesh.receiveShadowの値）。
+  // material.uniformsのマージでは供給されず、コンパイル済みプログラムのuniformとして
+  // 直接 setValue() されるため、シェーダー側で明示的に宣言しておく必要がある
+  // （宣言しないと getShadowMask() 内の参照が「undeclared identifier」でコンパイル不能になる。
+  //   参照する #include <shadowmask_pars_fragment> より前に置くこと＝GLSLは前方参照不可）。
+  uniform bool receiveShadow;
+
+  #include <shadowmap_pars_fragment>
+  #include <shadowmask_pars_fragment>
+
   uniform vec3 uDeepColor;
   uniform vec3 uShallowColor;
   uniform vec3 uSunDir;
@@ -84,6 +119,10 @@ const WATER_FRAGMENT_SHADER = `
 
     vec3 color = base + vec3(1.0, 0.96, 0.85) * spec * 1.1;
     color = mix(color, uShallowColor * 1.4, fresnel * 0.4);
+
+    // 船の影を落とす。完全な黒にはせず海色に沈める程度（実際の水面の影は真っ黒にならない）
+    float shadow = getShadowMask();
+    color *= mix(0.55, 1.0, shadow);
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -185,6 +224,19 @@ export function buildThreeScene(canvas, scene, options = {}) {
   // 遠景ランドマーク（富士山など）を霞ませて見せるため、fogの終端を遠くまで延ばす。晴天の明るい霞色にする
   scene3d.fog = new THREE.Fog(0xcfe9f5, 700, 7200);
 
+  // 環境マップ（品質向上計画 優先度1）: 空のグラデーションをPMREMGeneratorで畳み込み、
+  // scene.environmentに設定する。追加のテクスチャ・外部アセットは使わない
+  // （既存のcreateSkyTexture()を等距円筒図法テクスチャとして再解釈するだけ）。
+  // これによりMeshStandardMaterialのmetalness/roughnessが実際に何かを映り込ませるようになる
+  // （船体・窓ガラス・観覧車の球体展望室など）。scene.backgroundとは別テクスチャなので独立して破棄できる。
+  const pmremGenerator = new THREE.PMREMGenerator(renderer);
+  const envSourceTexture = createSkyTexture();
+  envSourceTexture.mapping = THREE.EquirectangularReflectionMapping;
+  envSourceTexture.colorSpace = THREE.SRGBColorSpace;
+  scene3d.environment = pmremGenerator.fromEquirectangular(envSourceTexture).texture;
+  pmremGenerator.dispose();
+  envSourceTexture.dispose();
+
   // 遠景の背景装飾（東京湾らしさを出す任意の見た目要素）。
   // シミュレーション・センサーロジックには関与しない、純粋な装飾なので、
   // 問題が出た場合はこの1行を削るだけで安全に無効化できる。
@@ -214,28 +266,53 @@ export function buildThreeScene(canvas, scene, options = {}) {
   const hemi = new THREE.HemisphereLight(0xdcf0ff, 0x4a6a4a, 1.5);
   scene3d.add(hemi);
   const sun = new THREE.DirectionalLight(0xfff8e6, 2.0);
-  sun.position.copy(sunDir).multiplyScalar(1200).add(new THREE.Vector3(center.x, 0, -center.y));
+  sun.position.copy(sunDir).multiplyScalar(600).add(new THREE.Vector3(center.x, 0, -center.y));
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = -span;
-  sun.shadow.camera.right = span;
-  sun.shadow.camera.top = span;
-  sun.shadow.camera.bottom = -span;
-  sun.shadow.camera.far = 3000;
+  // 品質向上計画 優先度2: 影を「船の周辺だけ」に絞って実用にする。
+  // 以前は3,800m四方/1024pxでテクセル3.7m（船14.7mが4px）＝ぼやけた染み。
+  // 400m四方/2048pxならテクセル約0.2mになり、接地感が出る。
+  // その代わり影の描画範囲が狭くなるため、毎フレーム updateShadowTarget() でヒーロー艇（船団の注視点）に
+  // 追従させる。遠景の建物などの影は元から視認できないレベルだったので範囲外になっても実害がない。
+  const SHADOW_BOX_HALF = 200; // 400m四方
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -SHADOW_BOX_HALF;
+  sun.shadow.camera.right = SHADOW_BOX_HALF;
+  sun.shadow.camera.top = SHADOW_BOX_HALF;
+  sun.shadow.camera.bottom = -SHADOW_BOX_HALF;
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 1400;
+  sun.shadow.bias = -0.0015;
   scene3d.add(sun);
   scene3d.add(sun.target);
 
-  const waterUniforms = {
-    uTime: { value: 0 },
-    uDeepColor: { value: new THREE.Color(0x0f6788) },
-    uShallowColor: { value: new THREE.Color(0x59c2d6) },
-    uSunDir: { value: sunDir },
-    uCameraPos: { value: new THREE.Vector3() },
-  };
+  /** 太陽（＝影のカメラ）を船団の注視点に追従させる。orbitTargetの更新後に毎フレーム呼ぶ。 */
+  function updateShadowTarget(focusX, focusY) {
+    const focusWorld = new THREE.Vector3(focusX, 0, -focusY);
+    sun.target.position.copy(focusWorld);
+    sun.position.copy(sunDir).multiplyScalar(600).add(focusWorld);
+  }
+
+  const waterUniforms = THREE.UniformsUtils.merge([
+    // lights:trueにすると、レンダラーは "material.uniforms.directionalShadowMap.value = ..." のように
+    // 自前のuniformsオブジェクトへ直接書き込みに来る。UniformsLib.lightsを取り込んでおかないと
+    // その書き込み先（.value）自体が存在せず「Cannot set properties of undefined」で毎フレーム落ちる
+    // （実測で確認したハマりどころ。素のShaderMaterialにlights:trueだけ付けても動かない）。
+    THREE.UniformsLib.lights,
+    {
+      uTime: { value: 0 },
+      uDeepColor: { value: new THREE.Color(0x0f6788) },
+      uShallowColor: { value: new THREE.Color(0x59c2d6) },
+      uSunDir: { value: sunDir },
+      uCameraPos: { value: new THREE.Vector3() },
+    },
+  ]);
   const waterMaterial = new THREE.ShaderMaterial({
     uniforms: waterUniforms,
     vertexShader: WATER_VERTEX_SHADER,
     fragmentShader: WATER_FRAGMENT_SHADER,
+    // 影のサンプリング用uniform（directionalShadowMap等）をレンダラーに供給させるためのフラグ。
+    // これが無いとシェーダー中のgetShadowMask()は常にダミー値のまま（影が一切乗らない）になる。
+    lights: true,
   });
   // 水面は視界いっぱいに広げる。狭いと船上のブリッジカメラから水面の縁が見えてしまう
   // （海が「板」に見え、デジタルツインとしての説得力を損なう）。
@@ -244,6 +321,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
   const water = new THREE.Mesh(waterGeo, waterMaterial);
   water.rotation.x = -Math.PI / 2;
   water.position.set(center.x, 0, -center.y);
+  water.receiveShadow = true; // 品質向上計画 優先度2: 船の影を水面自身に受けさせる
   scene3d.add(water);
 
   // 海岸線（ローカル座標 x,y）を Three.js の x,z 平面へ投影して押し出す
@@ -278,6 +356,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
     const s = SHIP_VISUAL_SCALE;
     // 座標系: +X が船首、+Y が上、±Z が舷側（ジオメトリ側で正規化済み）
     const group = new THREE.Group();
+    group.name = `ship-${id}`; // devtools計測用（qa-shots.jsが船体だけの頂点数を分離するために使う）
     group.rotation.order = 'YXZ'; // ヨー(針路) → ピッチ → ロール の順で適用する
 
     const hull = new THREE.Mesh(hullGeometry, new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.4, metalness: 0.1 }));
@@ -398,6 +477,8 @@ export function buildThreeScene(canvas, scene, options = {}) {
       // 急なカメラ移動を避けるため補間で寄せる
       orbitTarget.lerp(new THREE.Vector2(target.x, target.y), 0.08);
     }
+    // 影のカメラも同じ注視点に追従させる（400m四方に絞った分、船から外れると影が消えるため）
+    updateShadowTarget(orbitTarget.x, orbitTarget.y);
   }
 
   let orbitAngle = 0;
