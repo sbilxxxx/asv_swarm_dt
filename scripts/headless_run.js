@@ -15,8 +15,11 @@
  *
  *   --episodes N  実行するエピソード数（既定5）
  *   --boats N     隻数（既定: シナリオ既定のspawn数=3のまま）。シナリオのspawn数を超える場合、
- *                 既存spawnを起点にリング状へオフセットしたspawnを決定論的に追加合成する
- *                 （陣営はdefender/intruderを交互割当。乱数は使わない方針を踏襲）
+ *                 既存spawnを起点に渦巻き状へオフセットしたspawnを決定論的に追加合成する
+ *                 （陣営はdefender/intruderを交互割当。乱数は使わない方針を踏襲）。
+ *                 ただし合成後の陣営がdefender/intruderのどちらかに偏る（例: --boats 1, 2）と
+ *                 evaluateMission()が初手でdefended/timeout判定してしまい、意味の無い
+ *                 steps/sが出るため、両陣営が最低1隻ずつ揃わない場合はエラーで終了する
  *   --out path    env.logger.toJsonl() の内容をファイルへ書き出す（core自体はfs非依存のまま、
  *                 ファイルI/OはこのNode専用スクリプト側に隔離する）
  *   --quiet       エピソードごとの進捗行を省略し、最終サマリのみ出力
@@ -50,11 +53,18 @@ function parseArgs(argv) {
 }
 
 /**
- * シナリオのspawnsを目標隻数まで決定論的に増やす。既存spawnを起点に、リング状
- * （層ごとに半径60m刻み、角度は目標隻数で等分）へオフセットした位置を追加する。
+ * シナリオのspawnsを目標隻数まで決定論的に増やす。既存spawnを起点に、渦巻き状
+ * （角度は合成順nに単調増加、半径は同じ基点を再訪するたび60m刻みで広がる）へ
+ * オフセットした位置を追加する。角度がn全体（0〜targetCount-1）にわたって単調に
+ * 増えていくため、実際の軌跡はリング（同心円）ではなく外向きのスパイラルになる。
  * 陣営はdefender/intruderを交互に割り当てる（3隻のシナリオ既定は2防御:1侵入だが、
  * 大量隻数のスループット計測ではバランスより「決定論的に再現できること」を優先する）。
  * origin(coord.js)はcreateSceneGeometry()で設定済みであること前提（呼び出し順に注意）。
+ *
+ * 戻り値の陣営構成は呼び出し側（main()）で検証する。targetCountが1〜2隻など
+ * 小さい場合、元のspawnsをslice()するだけでは片方の陣営が消え（例:
+ * --boats 2 → defender-1, defender-2のみでintruderが0隻）、evaluateMission()が
+ * 初手で'defended'/'timeout'と誤判定して意味の無いsteps/sを出してしまう。
  */
 function synthesizeSpawns(baseSpawns, targetCount, { latLonToLocal, localToLatLon }) {
   if (targetCount <= baseSpawns.length) return baseSpawns.slice(0, targetCount);
@@ -126,6 +136,21 @@ async function main() {
 
   const boatsTarget = opts.boats ?? scenario.spawns.length;
   const spawns = synthesizeSpawns(scenario.spawns, boatsTarget, { latLonToLocal, localToLatLon });
+
+  // 片方の陣営が0隻だと、evaluateMission()がintruder不在=defended（またはtimeout）を
+  // 初手で返してしまい、意味の無い(steps=1桁の)steps/sを出してしまう
+  // （例: --boats 2 は元のdefender-1/defender-2のみが残りintruderが消える）。
+  // これは「スループット計測ツールが無意味な設定を黙って受理する」バグなので、
+  // 未知フラグと同じくthrow -> main().catch()経由でエラーメッセージ・非ゼロ終了にする。
+  const hasDefender = spawns.some((s) => s.faction === 'defender');
+  const hasIntruder = spawns.some((s) => s.faction === 'intruder');
+  if (!hasDefender || !hasIntruder) {
+    throw new Error(
+      `--boats ${spawns.length} produces a degenerate spawn set (defender=${spawns.filter((s) => s.faction === 'defender').length}, ` +
+        `intruder=${spawns.filter((s) => s.faction === 'intruder').length}); need at least 1 of each faction for a meaningful episode. ` +
+        'Use --boats >= 3 (or omit --boats to keep the scenario default).'
+    );
+  }
 
   const protectedAsset = scenario.protectedAssetLatLon
     ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
