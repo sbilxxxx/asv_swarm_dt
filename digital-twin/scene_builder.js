@@ -18,15 +18,22 @@ import { buildLandmarks } from './landmarks.js';
  * どちらか片方だけ変更すると「水面と船の波が食い違う」ため、必ずここだけを編集する。
  * 各項: 振幅 * sin(kx*x + ky*y + speed*t)
  */
+// 品質向上計画 優先度4: 振幅を実測で約1.7倍に引き上げた（0.35/0.22/0.3 → 0.55/0.4/0.5）。
+// 海面LOD導入（近傍600m四方・128分割＝1マス4.7m）でサンプリング解像度は足りていたが、
+// それでも実際のゲーム視点（オービット半径46）に近い距離のスクリーンショットで波がほぼ見えなかった
+// （元の振幅は最大でも±0.87、傾き1〜2度程度と非常に緩やかなため）。波長・伝播速度は変えていない
+// （「やらないこと」＝波の物理的忠実性の追求とは別軸の調整。見た目の可視性はこの計画の目的そのもの）。
 const WAVE_TERMS = [
-  { amp: 0.35, kx: 0.045, ky: 0.0, speed: 1.3 },
-  { amp: 0.22, kx: 0.0, ky: 0.07, speed: -0.9 },
-  { amp: 0.3, kx: 0.02, ky: 0.02, speed: 0.55 },
+  { amp: 0.55, kx: 0.045, ky: 0.0, speed: 1.3 },
+  { amp: 0.4, kx: 0.0, ky: 0.07, speed: -0.9 },
+  { amp: 0.5, kx: 0.02, ky: 0.02, speed: 0.55 },
 ];
 
 /**
- * 水面高さ（ワールドXZ平面上の点における波の変位）。
- * 引数は水面メッシュのローカル座標系（回転前のXY）に合わせる。
+ * 水面高さ（シミュレーション座標 x, y の点における波の変位）。
+ * 水面シェーダー側もワールド座標＝シミュレーション座標基準で位相を評価するため
+ * （海面LODで近傍・遠方の2パッチが波の位相を共有するために必要。scene_builder.js内WATER_VERTEX_SHADER参照）、
+ * ここも center 等でオフセットせず、シミュレーション座標をそのまま渡す。
  */
 function waveHeightAt(x, y, t) {
   let sum = 0;
@@ -40,6 +47,13 @@ function waveHeightAt(x, y, t) {
 function glslFloat(n) {
   return Number.isInteger(n) ? `${n}.0` : `${n}`;
 }
+
+// 波高の理論上の最大絶対値（全項の振幅を単純合計＝実際にはほぼ起こらない上限値）。
+// フラグメントシェーダーの crest（0..1正規化）がこれを基準に正規化するため、WAVE_TERMSと必ず連動させる。
+// これが無いと「crestは vWave が ±1 に収まる前提」のまま振幅だけ増やすことになり、
+// 大きい波高がclampで頭打ちになって、大きくした意味の分だけ逆に見た目の階調が潰れてしまう
+// （実測で発生: 振幅を上げたのにcrestの実効レンジが0.8〜1.0付近に潰れ、波がむしろ見えにくくなった）。
+const WAVE_AMPLITUDE_SUM = WAVE_TERMS.reduce((sum, w) => sum + w.amp, 0);
 
 // 品質向上計画 優先度2: 水面に船の影を落とす。
 // 別メッシュの「影受け板」を水面のどこかの高さに置く案は試したが、水面と船体（喫水線をまたいで
@@ -59,10 +73,20 @@ const WATER_VERTEX_SHADER = `
 
   void main() {
     vec3 pos = position;
+
+    // 品質向上計画 優先度4（海面LOD）: 波の位相はメッシュのローカル座標ではなく、
+    // ワールド座標（＝シミュレーション座標 x, y と同じ基準）で評価する。
+    // 近傍パッチ（船を追従して動く）と遠方パッチ（固定）の2枚が同じ水面シェーダーを共有するため、
+    // ローカル座標基準のままだと2枚のメッシュ原点のズレがそのまま波の位相ズレになり、
+    // パッチの継ぎ目で波がガクッと食い違う（＝見た目にひび割れて見える）。
+    // ワールド座標基準にしておけば、パッチが何枚あっても・どこにあっても同じ波面を評価する。
+    vec4 worldPosFlat = modelMatrix * vec4(pos.x, pos.y, 0.0, 1.0);
+    float wx = worldPosFlat.x;
+    float wy = -worldPosFlat.z; // シミュレーション座標のyはワールドZの符号反転（scene_builder.js全体の規約）
     float wave =
 ${WAVE_TERMS.map(
   (w) =>
-    `      ${glslFloat(w.amp)} * sin(pos.x * ${glslFloat(w.kx)} + pos.y * ${glslFloat(w.ky)} + uTime * ${glslFloat(w.speed)})`
+    `      ${glslFloat(w.amp)} * sin(wx * ${glslFloat(w.kx)} + wy * ${glslFloat(w.ky)} + uTime * ${glslFloat(w.speed)})`
 ).join(' +\n')};
     pos.z += wave;
     vWave = wave;
@@ -109,7 +133,9 @@ const WATER_FRAGMENT_SHADER = `
     vec3 dy = dFdy(vWorldPos);
     vec3 normal = normalize(cross(dx, dy));
 
-    float crest = clamp(vWave * 0.5 + 0.5, 0.0, 1.0);
+    // vWaveの理論最大振幅（WAVE_AMPLITUDE_SUM、JS側と共有）で正規化してから0..1にマップする。
+    // 単純に*0.5+0.5だけだと、振幅の合計が1を超えるとクランプで階調が潰れてしまう（実測で発見）。
+    float crest = clamp(vWave / ${glslFloat(WAVE_AMPLITUDE_SUM)} * 0.5 + 0.5, 0.0, 1.0);
     vec3 base = mix(uDeepColor, uShallowColor, crest * 0.45);
 
     vec3 viewDir = normalize(uCameraPos - vWorldPos);
@@ -119,6 +145,14 @@ const WATER_FRAGMENT_SHADER = `
 
     vec3 color = base + vec3(1.0, 0.96, 0.85) * spec * 1.1;
     color = mix(color, uShallowColor * 1.4, fresnel * 0.4);
+
+    // 品質向上計画 優先度4: 近傍パッチで波の起伏を実際に見えるようにする。
+    // WAVE_TERMSの実振幅は±1m弱・傾きは1〜2度程度と非常に緩やかで、
+    // 鏡面反射（specular, exponent=70）だけでは波の形がほぼ見えなかった（実測でグレージング角のスクショを確認）。
+    // 波高そのもの（vWave）で明度を直接変調し、波の稜線・谷を強調する
+    // （物理的な陰影ではなく見た目のための誇張。「やらないこと」節の対象は波の物理忠実性であり、
+    // 見た目の可視性はこの計画の目的そのものなので範囲外ではない）。
+    color *= 0.82 + 0.36 * crest;
 
     // 船の影を落とす。完全な黒にはせず海色に沈める程度（実際の水面の影は真っ黒にならない）
     float shadow = getShadowMask();
@@ -439,15 +473,32 @@ export function buildThreeScene(canvas, scene, options = {}) {
     // これが無いとシェーダー中のgetShadowMask()は常にダミー値のまま（影が一切乗らない）になる。
     lights: true,
   });
-  // 水面は視界いっぱいに広げる。狭いと船上のブリッジカメラから水面の縁が見えてしまう
-  // （海が「板」に見え、デジタルツインとしての説得力を損なう）。
+  // 品質向上計画 優先度4: 海面LOD。
+  // 以前は9,000m四方を一律160×160（1マス56m、船の全長14.7mの4倍）で覆っており、
+  // 船の周囲では波の起伏が実質的に無いのと同じだった（頂点予算の83%を占めるのに主役の近くでは見えない）。
+  // ここでは2枚に分ける: 近傍パッチ（船を追従して動く・高精細）と遠方パッチ（固定・粗い）。
+  // 波はワールド座標基準の同じシェーダー・同じ WAVE_TERMS で評価するため（上のWATER_VERTEX_SHADER参照）、
+  // 2枚のメッシュ間で位相がズレることはない＝継ぎ目で波の高さが食い違ってひび割れて見える心配がない。
   const waterExtent = Math.max(span * 4, 9000);
-  const waterGeo = new THREE.PlaneGeometry(waterExtent, waterExtent, 160, 160);
-  const water = new THREE.Mesh(waterGeo, waterMaterial);
-  water.rotation.x = -Math.PI / 2;
-  water.position.set(center.x, 0, -center.y);
-  water.receiveShadow = true; // 品質向上計画 優先度2: 船の影を水面自身に受けさせる
-  scene3d.add(water);
+  const farGeo = new THREE.PlaneGeometry(waterExtent, waterExtent, 24, 24);
+  const waterFar = new THREE.Mesh(farGeo, waterMaterial);
+  waterFar.rotation.x = -Math.PI / 2;
+  waterFar.position.set(center.x, 0, -center.y);
+  waterFar.receiveShadow = true; // 品質向上計画 優先度2: 船の影を水面自身に受けさせる
+  scene3d.add(waterFar);
+
+  const NEAR_WATER_EXTENT = 600;
+  const nearGeo = new THREE.PlaneGeometry(NEAR_WATER_EXTENT, NEAR_WATER_EXTENT, 128, 128);
+  const waterNear = new THREE.Mesh(nearGeo, waterMaterial); // マテリアルを共有＝uTime等のuniformも自動的に同期する
+  waterNear.rotation.x = -Math.PI / 2;
+  waterNear.position.set(center.x, 0.02, -center.y); // 遠方パッチよりわずかに高くし、重なり域で確実に手前に描かれるようにする（スカート）
+  waterNear.receiveShadow = true;
+  scene3d.add(waterNear);
+
+  /** 近傍パッチを船団の注視点に追従させる。影のターゲットと同じタイミング（updateShips内）で呼ぶ。 */
+  function updateNearWater(focusX, focusY) {
+    waterNear.position.set(focusX, 0.02, -focusY);
+  }
 
   // 海岸線（ローカル座標 x,y）を Three.js の x,z 平面へ投影して押し出す
   const shape = new THREE.Shape();
@@ -613,9 +664,10 @@ export function buildThreeScene(canvas, scene, options = {}) {
     for (const e of entities) {
       const { group, wakeMat } = ensureShip(e.id, e.faction);
 
-      // 波の局所形状。水面メッシュのローカル座標（原点=center）に合わせて評価する
-      const wx = e.x - center.x;
-      const wy = e.y - center.y;
+      // 波の局所形状。水面シェーダーと同じくシミュレーション座標をそのまま使う
+      // （海面LODで近傍パッチが船を追従して動くため、center基準のオフセットは使えない。上のwaveHeightAt参照）
+      const wx = e.x;
+      const wy = e.y;
       const h = waveHeightAt(wx, wy, elapsedSeconds);
       const probe = 3.0; // 前後左右この距離の波高差から傾きを求める
       const hFwd = waveHeightAt(wx + Math.cos(e.heading) * probe, wy + Math.sin(e.heading) * probe, elapsedSeconds);
@@ -636,8 +688,10 @@ export function buildThreeScene(canvas, scene, options = {}) {
       // 急なカメラ移動を避けるため補間で寄せる
       orbitTarget.lerp(new THREE.Vector2(target.x, target.y), 0.08);
     }
-    // 影のカメラも同じ注視点に追従させる（400m四方に絞った分、船から外れると影が消えるため）
+    // 影のカメラ・近傍海面パッチも同じ注視点に追従させる
+    // （影は400m四方、近傍海面は600m四方に絞った分、船から外れると消えてしまうため）
     updateShadowTarget(orbitTarget.x, orbitTarget.y);
+    updateNearWater(orbitTarget.x, orbitTarget.y);
   }
 
   let orbitAngle = 0;
