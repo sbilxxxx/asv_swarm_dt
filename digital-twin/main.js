@@ -7,9 +7,8 @@
  * ここでは単純なスクリプト動作でASVを走らせる。
  */
 
-import { createSceneGeometry } from '../core/scene/scene_format.js';
+import { loadSceneFromScenario } from '../core/data/adapters/index.js';
 import { World } from '../core/sim/world.js';
-import { latLonToLocal } from '../core/coord.js';
 import { buildThreeScene } from './scene_builder.js';
 import { ThreeCameraSensor } from './camera_sensor.js';
 import { renderCameraPanel, renderRadarPanel, renderGnssPanel } from './hud.js';
@@ -22,9 +21,9 @@ async function loadScenario() {
 
 async function main() {
   const scenario = await loadScenario();
-  const scene = createSceneGeometry(scenario);
+  const scene = await loadSceneFromScenario(scenario);
 
-  const spawnLocal = scenario.spawns.map((s) => ({ ...s, local: latLonToLocal(s.lat, s.lon) }));
+  const spawnLocal = scenario.spawns.map((s) => ({ ...s, local: scene.projection.latLonToLocal(s.lat, s.lon) }));
   const focus = {
     x: spawnLocal.reduce((sum, s) => sum + s.local.x, 0) / spawnLocal.length,
     y: spawnLocal.reduce((sum, s) => sum + s.local.y, 0) / spawnLocal.length,
@@ -39,7 +38,7 @@ async function main() {
   // protectedAssetはswarm-sim側の攻防ロジック（mission.js）が使う。ここではまだ評価・描画しないが、
   // 同じWorld設定を素通しでき、Worldインスタンスの構成をswarm-sim/env_apiと揃えておく。
   const protectedAsset = scenario.protectedAssetLatLon
-    ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+    ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
     : null;
   const world = new World({ scene, cameraSensor, capacity: scenario.spawns.length, protectedAsset });
   window.__debug = { three, world, focus, scene }; // devtools確認用フック

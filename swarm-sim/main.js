@@ -18,11 +18,10 @@
  * 1フレームで加算する実時間は MAX_FRAME_DT_S でクランプする。
  */
 
-import { createSceneGeometry } from '../core/scene/scene_format.js';
+import { loadSceneFromScenario } from '../core/data/adapters/index.js';
 import { World } from '../core/sim/world.js';
 import { EnvApi } from '../core/env/env_api.js';
 import { LlmAgent } from '../core/sim/agents/llm_agent.js';
-import { latLonToLocal } from '../core/coord.js';
 import { createProjection, drawMap, drawProtectedAsset } from './map_view.js';
 import { drawAgents } from './agent_view.js';
 import { CommsPulses } from './comms_view.js';
@@ -56,17 +55,17 @@ async function loadScenario() {
 
 async function main() {
   const scenario = await loadScenario();
-  const scene = createSceneGeometry(scenario);
+  const scene = await loadSceneFromScenario(scenario);
   const world = new World({
     scene,
     capacity: scenario.spawns.length,
     protectedAsset: scenario.protectedAssetLatLon
-      ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+      ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
       : null,
   });
 
   for (const spawn of scenario.spawns) {
-    const { x, y } = latLonToLocal(spawn.lat, spawn.lon);
+    const { x, y } = scene.projection.latLonToLocal(spawn.lat, spawn.lon);
     world.spawn({
       id: spawn.id,
       faction: spawn.faction,

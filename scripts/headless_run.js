@@ -59,7 +59,9 @@ function parseArgs(argv) {
  * 増えていくため、実際の軌跡はリング（同心円）ではなく外向きのスパイラルになる。
  * 陣営はdefender/intruderを交互に割り当てる（3隻のシナリオ既定は2防御:1侵入だが、
  * 大量隻数のスループット計測ではバランスより「決定論的に再現できること」を優先する）。
- * origin(coord.js)はcreateSceneGeometry()で設定済みであること前提（呼び出し順に注意）。
+ * scene.projection（loadSceneFromScenario()の戻り値が持つ、このシナリオ専用のorigin変換）が
+ * 生成済みであること前提（呼び出し順に注意。A-7/E-6対応でcoord.jsのモジュールグローバルorigin
+ * は廃止されたため、synthesizeSpawns()にはscene.projectionの変換関数を明示的に渡す）。
  *
  * 戻り値の陣営構成は呼び出し側（main()）で検証する。targetCountが1〜2隻など
  * 小さい場合、元のspawnsをslice()するだけでは片方の陣営が消え（例:
@@ -127,15 +129,17 @@ async function main() {
   const { World } = await import('../core/sim/world.js');
   const { EnvApi } = await import('../core/env/env_api.js');
   const missionMod = await import('../core/sim/mission.js');
-  const { createSceneGeometry } = await import('../core/scene/scene_format.js');
-  const { latLonToLocal, localToLatLon } = await import('../core/coord.js');
+  const { loadSceneFromScenario } = await import('../core/data/adapters/index.js');
   const { LlmAgent } = await import('../core/sim/agents/llm_agent.js');
 
   const scenario = JSON.parse(fs.readFileSync(SCENARIO_PATH, 'utf8'));
-  const scene = createSceneGeometry(scenario); // coord.jsのoriginをこのシナリオへ設定（spawn合成より先に必要）
+  const scene = await loadSceneFromScenario(scenario); // scene.projectionをspawn合成より先に用意する
 
   const boatsTarget = opts.boats ?? scenario.spawns.length;
-  const spawns = synthesizeSpawns(scenario.spawns, boatsTarget, { latLonToLocal, localToLatLon });
+  const spawns = synthesizeSpawns(scenario.spawns, boatsTarget, {
+    latLonToLocal: scene.projection.latLonToLocal,
+    localToLatLon: scene.projection.localToLatLon,
+  });
 
   // 片方の陣営が0隻だと、evaluateMission()がintruder不在=defended（またはtimeout）を
   // 初手で返してしまい、意味の無い(steps=1桁の)steps/sを出してしまう
@@ -153,11 +157,11 @@ async function main() {
   }
 
   const protectedAsset = scenario.protectedAssetLatLon
-    ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+    ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
     : null;
   const world = new World({ scene, capacity: spawns.length, protectedAsset });
   for (const s of spawns) {
-    const { x, y } = latLonToLocal(s.lat, s.lon);
+    const { x, y } = scene.projection.latLonToLocal(s.lat, s.lon);
     world.spawn({
       id: s.id,
       faction: s.faction,

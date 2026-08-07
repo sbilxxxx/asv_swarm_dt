@@ -13,6 +13,18 @@ import * as THREE from 'three';
 import { buildLandmarks } from './landmarks.js';
 
 /**
+ * landmarkSet名 → ランドマーク群のビルダー関数。
+ * レビューB-8対応: 以前はscene_builder.jsが無条件にbuildLandmarks()（東京タワー・
+ * レインボーブリッジ・富士山・お台場をハードコード）を呼んでおり、シナリオを別海域に
+ * 差し替えても東京の景観が描かれてしまい「海域を固定しない」という原則に反していた。
+ * 既知のlandmarkSetが指定されたときだけ、対応するビルダーを描画する。landmarks.js自体は
+ * 東京湾セット専用のままでよい（buildLandmarksという名前のまま、tokyo_bayキーで登録する）。
+ */
+const LANDMARK_BUILDERS = {
+  tokyo_bay: buildLandmarks,
+};
+
+/**
  * 波の合成パラメータ（単一の情報源）。
  * 水面の頂点シェーダーと、船を波に追従させるJS側の計算の両方がこの定義を使う。
  * どちらか片方だけ変更すると「水面と船の波が食い違う」ため、必ずここだけを編集する。
@@ -396,10 +408,16 @@ export function buildThreeScene(canvas, scene, options = {}) {
   pmremGenerator.dispose();
   envSourceTexture.dispose();
 
-  // 遠景の背景装飾（東京湾らしさを出す任意の見た目要素）。
-  // シミュレーション・センサーロジックには関与しない、純粋な装飾なので、
-  // 問題が出た場合はこの1行を削るだけで安全に無効化できる。
-  scene3d.add(buildLandmarks());
+  // 遠景の背景装飾（海域らしさを出す任意の見た目要素）。
+  // シミュレーション・センサーロジックには関与しない、純粋な装飾。
+  // scene.landmarkSet（シナリオJSON由来）で選択し、未指定・未知の値なら何も描画しない
+  // （B-8対応: 東京湾ハードコードをやめ、シナリオ非対応の海域では景観を追加しない）。
+  const landmarkBuilder = LANDMARK_BUILDERS[scene.landmarkSet];
+  if (landmarkBuilder) {
+    scene3d.add(landmarkBuilder());
+  } else if (scene.landmarkSet) {
+    console.warn(`未知のlandmarkSet: "${scene.landmarkSet}"（既知: ${Object.keys(LANDMARK_BUILDERS).join(', ')}）。ランドマークは描画しません。`);
+  }
 
   const { minX, maxX, minY, maxY } = scene.bounds;
   // 俯瞰カメラのオービット中心は「陸地＋運用エリアの中間点」ではなく、

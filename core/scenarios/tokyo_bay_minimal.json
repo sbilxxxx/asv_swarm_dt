@@ -1,7 +1,15 @@
 {
   "name": "tokyo_bay_minimal",
   "note": "デモ用の簡略化データ。実在の海岸線・水深とは一致しない、約1.9km四方の軽量な沿岸モデル（北側が陸地、南側が外洋）。将来S-100/PLATEAU等の実データアダプターに差し替え可能（core/data/adapters/index.js参照）。舞台は東京湾に固定されない。これはデフォルトシナリオの一例。スケールはASVの巡航速度・レーダー探知距離（1500m）に対して意味のある大きさに揃えている。",
+  "adapter": "manual_coastline",
+  "landmarkSet": "tokyo_bay",
   "originLatLon": { "lat": 35.45, "lon": 139.75 },
+  "spawnsAreaLatLon": [
+    { "lat": 35.443, "lon": 139.744 },
+    { "lat": 35.443, "lon": 139.758 },
+    { "lat": 35.452, "lon": 139.758 },
+    { "lat": 35.452, "lon": 139.744 }
+  ],
   "coastlineLatLon": [
     { "lat": 35.458534, "lon": 139.739524 },
     { "lat": 35.458534, "lon": 139.760476 },
