@@ -155,6 +155,10 @@ export class EnvApi {
         position: { x: this.world.state.x[i], y: this.world.state.y[i], heading: this.world.state.heading[i] },
         // 防護対象（侵入側の目標／防御側の哨戒基地）。未設定シナリオではnull（mission.jsのbreach判定もnull時はスキップされる）。
         protectedAsset: this.world.protectedAsset ? { ...this.world.protectedAsset } : null,
+        // 現在のエピソード番号（EpisodeLogger.startEpisode()が発番）。エージェント側がエピソードごとに
+        // 決定論的に行動を変える（例: 侵入側の接近角）ための唯一の外部入力。乱数は使わない方針のため、
+        // 「毎回同じ結果になる」問題への対処はこの値を種にした決定論的なバリエーションで行う。
+        episode: this.logger.currentEpisode,
         timestamp: this.world.clock,
       };
     }

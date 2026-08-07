@@ -89,17 +89,27 @@
   3秒表示後に自動`reset()`してエピソードを繰り返す）・ミッションイベントのログ表示・ログJSONL
   ダウンロードボタンを実装（`swarm-sim/main.js`, `map_view.js`, `hud_panel.js`, `log_panel.js`）。
   スクリーンショットで確認: 3隻は同一点へ収束せず、一定の隊列を保ったまま防護対象へ向かう動きになった
-  （＝もはや「団子」ではない）。ただし後述の限界あり
-  - **限界（実測で判明・要フォローアップ）**: `AsvPlatform`は陣営に関係なく同一の`MAX_SPEED_MPS=6`で
-    頭打ちになるため、加速が終わった後は防御側・侵入側とも巡航速度が事実上同じになる。防御側の
-    迎撃ロジックは相手の現在位置をそのまま追う純追跡（lead無し）のままなので、等速の純追跡は
-    幾何学的に距離をゼロへ詰め切れない（`INTERCEPT_RANGE_M=60`に対し、実測では最短でも約94〜96mで
-    頭打ち）。その結果、既定シナリオでは**毎回ほぼ同じタイミング（t≈167〜170s）で`breached`に終わる**
-    決定論的な展開になっている（`防衛`・`時間切れ`は理論上到達可能だが、この初期配置・行動則の
-    組み合わせでは発生しにくい）。今回は防御側の迎撃throttleを0.6→1.0（通報追跡は0.55→0.8）へ
-    引き上げたが、上記の理由で勝敗バランスまでは変わらない。恒常的な解決には、防御側に予測（lead）
-    操舵を持たせるか、陣営別に最高速度差を設ける（`asv.js`の改修）等が必要で、本タスクの
-    「防御側の迎撃ロジックは既存のまま」という指示の範囲を超えるため、フォローアップ課題として残す
+  （＝もはや「団子」ではない）
+  - **限界と解消（フォローアップ済）**: 初回実装時点では、`AsvPlatform`が陣営に関係なく同一の
+    `MAX_SPEED_MPS=6`で頭打ちになるため、加速後は防御側・侵入側とも巡航速度が事実上同じになり、
+    防御側の迎撃ロジック（相手の現在位置をそのまま追う純追跡）は等速の純追跡では幾何学的に距離を
+    ゼロへ詰め切れず（`INTERCEPT_RANGE_M=60`に対し最短でも約94〜96mで頭打ち）、既定シナリオが
+    **毎回同じタイミングで`breached`に終わる決定論的な展開**になっていた。これはE-4（攻防のゲーム化）
+    の趣旨に反する（「勝ったり負けたりする反復対戦→戦術学習」の物語が成立しない）ため、追加対応した:
+    - **防御側にlead pursuit（見越し追跡）を追加**（`rule_based_fallback.js`の`predictInterceptBearing()`）。
+      レーダーのbearing/rangeからコンタクトの絶対位置を復元し、`memory`（`AgentBase.remember()`が
+      蓄積する過去observation）から同一コンタクトの前回位置を探して有限差分で速度を推定、その速度で
+      `MAX_LOOKAHEAD_S=6`秒先まで進んだ見越し点を狙う。速度推定できない初回遭遇時は純追跡にフォールバック
+    - **侵入側にエピソード別の迂回**を追加。乱数は使わない方針のため、`EnvApi._observationForAll()`が
+      新たに`observation.episode`（`EpisodeLogger.currentEpisode`）を渡し、侵入側は
+      `episode % 3`から決定論的に-1/0/+1の迂回角（`APPROACH_VARIATION_STEP_RAD=55°`）を選んで
+      防護対象より450m遠方では迂回、近づいたら直進に切り替える（`decideIntruder()`）。
+      同じエピソード番号なら毎回同じ経路、エピソードが変われば経路も変わる
+    - **検証**: `tests/core_smoke.test.js`に`testMultiEpisodeOutcomeVariety`を追加し、実シナリオ・
+      実エージェントで6エピソード連続実行して`defended`と`breached`の両方が発生することを回帰確認
+      （実測シーケンス: `defended, breached, defended, defended, breached, defended`）。
+      swarm-sim実画面でも`防衛成功`バナー（防衛1件目）・`突破された`側のタリー増加（突破1件目）を
+      スクリーンショットで確認済み
 
 **審査員目線の結論**: 現状は「動く骨格のデモ」であり、「計算資源を投じたくなる規模・密度の何かが起きている画」ではない。数十秒見れば飽和することが伝わってしまう。
 
@@ -112,7 +122,7 @@
 | 1 | ローカル改善のcommit & push。申請URLの実体を最新化 | ~10分 | **要実施** |
 | 2 | 3D船の回転規約修正＋子メッシュ座標の再定義＋規約のコメント明文化 | ~1時間 | **対応済** |
 | 3 | レーダー左右反転修正と、GNSS headingの北基準CW・0〜360°正規化表示（`gnss.js`は数学規約の生値で360°超えも表示される） | ~30分 | **一部対応**（レーダーのみ。GNSS表示は未対応） |
-| 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応済（core・View双方）** — `EnvApi.step()`が`evaluateMission()`を呼び`{observation, reward, done, info:{outcome, events}}`を返す。`EnvApi.reset()`が`World.resetEntities()`を呼びエピソード反復が実際に機能。dtも0.1sへ変更（旧0.5sは粗すぎた）。**swarm-sim側の配線もこのタスクで完了**: シナリオに`protectedAssetLatLon`を追加、`observation.protectedAsset`をcore/env_api.jsに追加（`tests/core_smoke.test.js`で回帰確認）、`rule_based_fallback.js`を陣営別行動（侵入=目標到達＋軽い回避、防御=迎撃→通報調査→防護対象の哨戒）に書き換え、swarm-simにマーカー・突破半径円・エピソードHUD・結果バナー・自動`reset()`ループ・ミッションイベントログ・JSONLダウンロードボタンを実装。詳細と既知の限界（防御側が構造的に追いつけず`breached`に偏る決定論的な展開になっている点）はD節参照 |
+| 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応済（core・View双方）** — `EnvApi.step()`が`evaluateMission()`を呼び`{observation, reward, done, info:{outcome, events}}`を返す。`EnvApi.reset()`が`World.resetEntities()`を呼びエピソード反復が実際に機能。dtも0.1sへ変更（旧0.5sは粗すぎた）。**swarm-sim側の配線もこのタスクで完了**: シナリオに`protectedAssetLatLon`を追加、`observation.protectedAsset`をcore/env_api.jsに追加（`tests/core_smoke.test.js`で回帰確認）、`rule_based_fallback.js`を陣営別行動（侵入=目標到達＋軽い回避、防御=迎撃→通報調査→防護対象の哨戒）に書き換え、swarm-simにマーカー・突破半径円・エピソードHUD・結果バナー・自動`reset()`ループ・ミッションイベントログ・JSONLダウンロードボタンを実装。初回実装では防御側が構造的に追いつけず`breached`に偏る決定論的な展開になっていたが、lead pursuit＋エピソード別侵入経路のフォローアップで解消（`defended`/`breached`双方の発生を6エピソード連続実行で回帰確認）。詳細はD節参照 |
 | 5 | headlessランナー同梱（60行程度のNodeスクリプト）＋READMEに実測steps/s記載。「GPUで並列に回せる」を宣言から実証に変える | ~1-2時間 | **未対応** |
 | 6 | coord.jsの脱シングルトン化。originをSceneGeometryに持たせる | ~1時間 | **未対応** |
 | 7 | ログ形式の再設計。観測全文ネスト保存をやめ、per-agentフラット行のJSONL＋UIダウンロード導線 | ~2時間 | **対応済** — `episode_logger.js`のper-agentフラットJSONL化（`toJsonl()`）に加え、UIダウンロード導線（`swarm-sim/hud_panel.js`の「ログDL (.jsonl)」ボタン、Blob経由でダウンロード）を本タスクで実装 |

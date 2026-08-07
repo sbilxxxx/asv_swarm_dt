@@ -16,6 +16,10 @@
  *   3. reset()後の2エピソード目も正しく走ること
  *   4. 無力化された侵入艇はactionを与えても動かないこと（A-8のガード）
  *   5. 30隻×2000stepのログがtoJsonl()でクラッシュせず、各行がJSON.parseできること（B-6）
+ *   6. 既定シナリオ・実エージェント（rule_based_fallback.js）で複数エピソード回したとき、
+ *      'defended'と'breached'の両方が実際に起こること（優先度4フォローアップ: 防御側の
+ *      lead pursuitと侵入側のエピソード別迂回を入れる前は、等速の純追跡が幾何学的に
+ *      間合いを詰め切れず毎回'breached'で決定論的に終わっていた）
  */
 'use strict';
 
@@ -35,7 +39,8 @@ async function loadCore() {
   const missionMod = await import('../core/sim/mission.js');
   const { createSceneGeometry } = await import('../core/scene/scene_format.js');
   const { latLonToLocal } = await import('../core/coord.js');
-  return { World, EnvApi, missionMod, createSceneGeometry, latLonToLocal };
+  const { LlmAgent } = await import('../core/sim/agents/llm_agent.js');
+  return { World, EnvApi, missionMod, createSceneGeometry, latLonToLocal, LlmAgent };
 }
 
 /** 実シナリオファイルからWorldを構築する（core自身はfetchできないため、テスト側でJSONを読む） */
@@ -53,6 +58,58 @@ function buildScenarioWorld({ World, createSceneGeometry, latLonToLocal }) {
     spawnLocal.push({ id: s.id, x, y, heading });
   }
   return { world, scenario, spawnLocal };
+}
+
+/**
+ * 実シナリオ＋protectedAsset＋LlmAgent（既定=rule_based_fallback.js）でWorldを構築する。
+ * swarm-sim/main.js の初期化と同じ組み方（agentを渡してdecide()を実際に回せるようにする）。
+ */
+function buildScenarioWorldWithAgents({ World, createSceneGeometry, latLonToLocal, LlmAgent }) {
+  const scenarioPath = path.join(__dirname, '../core/scenarios/tokyo_bay_minimal.json');
+  const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
+  const scene = createSceneGeometry(scenario);
+  const protectedAsset = scenario.protectedAssetLatLon
+    ? latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+    : null;
+
+  const world = new World({ scene, capacity: scenario.spawns.length, protectedAsset });
+  for (const s of scenario.spawns) {
+    const { x, y } = latLonToLocal(s.lat, s.lon);
+    world.spawn({
+      id: s.id,
+      faction: s.faction,
+      platform: s.platform,
+      x,
+      y,
+      heading: (s.headingDeg * Math.PI) / 180,
+      agent: new LlmAgent({ id: s.id, faction: s.faction }),
+    });
+  }
+  return { world, scenario };
+}
+
+/** swarm-sim/main.jsと同じ間引き間隔でdecide()を呼びながら1エピソードをdoneまで走らせる */
+async function runOneEpisode(world, env, meta) {
+  const DECISION_INTERVAL_STEPS = 6;
+  let observation = env.reset(meta);
+  let stepCount = 0;
+  let result;
+  for (let i = 0; i < 3000; i++) {
+    const decideThisStep = stepCount % DECISION_INTERVAL_STEPS === 0;
+    const actions = {};
+    for (const [id, agent] of world.agents.entries()) {
+      const idx = world.state.indexOf(id);
+      if (idx < 0 || !world.state.alive[idx]) continue; // 撃破済みはdecide()自体をスキップ（A-8/Viewと同じガード）
+      if (decideThisStep || !agent.lastAction) agent.lastAction = await agent.decide(observation[id]);
+      actions[id] = agent.lastAction ?? { throttle: 0, steering: 0 };
+    }
+    result = env.step(actions);
+    observation = result.observation;
+    stepCount++;
+    if (result.done) break;
+  }
+  assert.ok(result.done, `episode did not reach done within the step guard (meta=${JSON.stringify(meta)})`);
+  return result;
 }
 
 async function testResetReturnsToSpawn({ World, EnvApi, createSceneGeometry, latLonToLocal }) {
@@ -264,6 +321,36 @@ async function testLoggerStress({ World, EnvApi }) {
   );
 }
 
+/**
+ * 既定シナリオ・実エージェントで複数エピソード回し、'defended'と'breached'の両方が
+ * 実際に起こることを確認する。乱数は使わないため、同一シナリオを繰り返すだけでは
+ * 毎回同じ結果になりがちだった（フォローアップ前の実測: 常にbreached、約94〜96mで
+ * 頭打ちの純追跡）。防御側のlead pursuit（core/sim/agents/rule_based_fallback.js）と
+ * 侵入側のエピソード別迂回（observation.episode由来）を入れたことで、決定論のまま
+ * エピソードごとに違う展開・違う結果になることをここで固定する。
+ */
+async function testMultiEpisodeOutcomeVariety({ World, EnvApi, createSceneGeometry, latLonToLocal, LlmAgent }) {
+  const { world, scenario } = buildScenarioWorldWithAgents({ World, createSceneGeometry, latLonToLocal, LlmAgent });
+  const env = new EnvApi(world, { dt: 0.1 });
+
+  const NUM_EPISODES = 6;
+  const outcomes = [];
+  for (let ep = 1; ep <= NUM_EPISODES; ep++) {
+    const result = await runOneEpisode(world, env, { scenario: scenario.name, seed: ep });
+    outcomes.push(result.info.outcome);
+  }
+
+  assert.ok(
+    outcomes.includes('defended'),
+    `expected at least one 'defended' outcome among ${NUM_EPISODES} episodes, got: ${outcomes.join(', ')}`
+  );
+  assert.ok(
+    outcomes.includes('breached'),
+    `expected at least one 'breached' outcome among ${NUM_EPISODES} episodes, got: ${outcomes.join(', ')}`
+  );
+  console.log(`OK: ${NUM_EPISODES} consecutive episodes produced both defended and breached: [${outcomes.join(', ')}]`);
+}
+
 async function main() {
   const core = await loadCore();
   await testResetReturnsToSpawn(core);
@@ -272,6 +359,7 @@ async function main() {
   await testStepAfterDoneIsIdempotent(core);
   await testTimeoutOutcome(core);
   await testLoggerStress(core);
+  await testMultiEpisodeOutcomeVariety(core);
   console.log('\nAll core smoke tests passed.');
 }
 
