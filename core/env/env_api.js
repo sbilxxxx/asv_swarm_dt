@@ -64,7 +64,9 @@ export class EnvApi {
       // 見つけて復活させる必要があるため）にし、ガードはここ・適用箇所に置く。
       if (!this.world.state.alive[i]) continue;
       const platform = this.world.platformInstances.get(entityId);
-      platform.step(this.world.state, i, action, this.dt);
+      // B-3対応: environment.sample()を運動学へ配線するため、Worldが保持するenvironmentと
+      // 現在時刻をplatform.stepへ渡す（未接続だった「差し込み口」を実際に効かせる）。
+      platform.step(this.world.state, i, action, this.dt, this.world.environment, this.world.clock);
     }
     this.world.clock += this.dt;
 

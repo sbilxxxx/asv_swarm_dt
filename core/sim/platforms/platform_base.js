@@ -12,8 +12,11 @@ export class PlatformBase {
    * @param {number} index
    * @param {{throttle: number, steering: number}} action
    * @param {number} dt - 秒
+   * @param {import('../environment/environment_base.js').EnvironmentBase} [environment] - B-3対応:
+   *   波・海流サロゲートモデルの差し込み口。未指定なら環境力を無視する（呼び出し側の後方互換用）
+   * @param {number} [t] - シミュレーション時刻（秒）。environment.sample(x,y,t)に渡す
    */
-  step(state, index, action, dt) {
+  step(state, index, action, dt, environment, t) {
     throw new Error('PlatformBase.step() must be implemented by subclass');
   }
 }

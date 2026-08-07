@@ -418,6 +418,52 @@ async function testCoordProjectionIsolatedPerScene({ World, loadSceneFromScenari
   );
 }
 
+/**
+ * B-3の回帰テスト。旧実装ではWorldがenvironmentを保持するだけでasv.js側からは
+ * 一度もsample()が呼ばれておらず、「波サロゲートモデルへの差し込み口」は差し替えても
+ * 何も起きないデコイだった。ここではnon-zeroなcurrentX/currentYを返すテスト用
+ * environmentを注入し、同じactions・同じstep数でも位置が変わることを確認する
+ * （CalmSeaEnvironmentとの比較で、配線が実際に効いていることを示す）。
+ */
+async function testEnvironmentSampleIsWiredIntoKinematics({ World, EnvApi, createOriginProjection }) {
+  const DRIFT_MPS = 2; // CalmSea(0)よりはっきり分かる程度の、しかし物理を壊さない程度の小さな一定海流
+  class DriftEnvironment {
+    sample(x, y, t) {
+      return { waveHeightM: 0, currentX: DRIFT_MPS, currentY: 0 };
+    }
+  }
+
+  async function runFixedSteps(environment) {
+    const world = new World({ scene: minimalScene({ createOriginProjection }), capacity: 2, environment });
+    // faction='intruder'かつprotectedAsset未設定にする: mission.evaluateMission()は
+    // 「生存intruderが0」でdefended、breachはasset未設定でスキップされるため、
+    // このテストが見たい50step分の純粋な運動学の違いが、doneによる早期打ち切りで
+    // 隠れないようにする（'defender'単騎だとintruder不在で1step目にdefended判定されてしまう）。
+    world.spawn({ id: 'boat-1', faction: 'intruder', x: 0, y: 0, heading: 0, agent: {} });
+    const env = new EnvApi(world, { dt: 0.1 });
+    env.reset({ scenario: 'env-sample-wiring', episodeIndex: 1 });
+    for (let step = 0; step < 50; step++) env.step({ 'boat-1': { throttle: 1, steering: 0 } });
+    const i = world.state.indexOf('boat-1');
+    return { x: world.state.x[i], y: world.state.y[i] };
+  }
+
+  const calmResult = await runFixedSteps(undefined); // Worldのデフォルト = CalmSeaEnvironment
+  const driftResult = await runFixedSteps(new DriftEnvironment());
+
+  const dx = driftResult.x - calmResult.x;
+  assert.ok(
+    Math.abs(dx) > 1,
+    `non-zero environment.sample() should measurably perturb position vs CalmSeaEnvironment ` +
+      `(calm.x=${calmResult.x}, drift.x=${driftResult.x}, dx=${dx})`
+  );
+  // 50step * dt(0.1) * DRIFT_MPS(2) = 10m相当が積算されているはず
+  approxEqual(dx, 50 * 0.1 * DRIFT_MPS, 1e-6, 'drift perturbation should match 50 steps * dt * DRIFT_MPS');
+  console.log(
+    `OK: environment.sample() is wired into AsvPlatform.step() kinematics ` +
+      `(calm.x=${calmResult.x.toFixed(3)}, drift.x=${driftResult.x.toFixed(3)}, dx=${dx.toFixed(3)}m)`
+  );
+}
+
 async function main() {
   const core = await loadCore();
   await testResetReturnsToSpawn(core);
@@ -428,6 +474,7 @@ async function main() {
   await testLoggerStress(core);
   await testMultiEpisodeOutcomeVariety(core);
   await testCoordProjectionIsolatedPerScene(core);
+  await testEnvironmentSampleIsWiredIntoKinematics(core);
   console.log('\nAll core smoke tests passed.');
 }
 
