@@ -36,7 +36,8 @@ export class EpisodeLogger {
 
   /**
    * 新しいエピソードを開始し、ヘッダ行を1行記録する。
-   * @param {{scenario?: string, seed?: number|string, [key: string]: any}} [meta]
+   * @param {{scenario?: string, episodeIndex?: number|string, [key: string]: any}} [meta] - episodeIndexは
+   *   呼び出し側が管理する通し番号であり、RNGのシードではない（値の意味を誤解させないための命名）
    */
   startEpisode(meta = {}) {
     this.episodeCount += 1;

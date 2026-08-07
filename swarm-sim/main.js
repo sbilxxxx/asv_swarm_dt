@@ -92,8 +92,10 @@ async function main() {
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
-  let episodeNum = 1;
-  let observation = env.reset({ scenario: scenario.name, seed: episodeNum });
+  // エピソード番号はenv.logger.currentEpisode（EpisodeLogger.startEpisode()が発番）を単一の情報源とし、
+  // ここでは重複カウンタを持たない。episodeIndexはRNGの種ではなく、単にreset()呼び出し回数の記録用メタデータ
+  // （JSONLヘッダに残る値の名前が「seed」だと乱数シードだと誤解されるため、この名前にしている）。
+  let observation = env.reset({ scenario: scenario.name, episodeIndex: 1 });
   const tally = { defended: 0, breached: 0, timeout: 0 };
 
   let stepCount = 0;
@@ -145,7 +147,7 @@ async function main() {
     drawAgents(ctx, entities, project);
     commsPulses.draw(ctx, entityById, project);
 
-    updateHud({ episode: episodeNum, clock: world.clock, tally });
+    updateHud({ episode: env.logger.currentEpisode, clock: world.clock, tally });
     if (banner) showOutcomeBanner(banner.outcome);
     else hideOutcomeBanner();
   }
@@ -159,10 +161,9 @@ async function main() {
       // 結果バナー表示中はstep()を呼ばず、wall timeの経過だけで次エピソードへ遷移する
       if (nowMs >= banner.untilMs) {
         banner = null;
-        episodeNum++;
         stepCount = 0;
         accumulatorS = 0;
-        observation = env.reset({ scenario: scenario.name, seed: episodeNum });
+        observation = env.reset({ scenario: scenario.name, episodeIndex: env.logger.currentEpisode + 1 });
       }
     } else {
       accumulatorS += rawDt * TIME_SCALE;

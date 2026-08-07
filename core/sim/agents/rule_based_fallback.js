@@ -69,6 +69,11 @@ const APPROACH_VARIATION_SWITCH_RANGE_M = 450;
 /** 迂回角の大きさ。episode番号から-1/0/+1が決定論的に選ばれ、この角度だけ目標方位を振る */
 const APPROACH_VARIATION_STEP_RAD = (55 * Math.PI) / 180;
 
+/** 防護対象近傍での哨戒throttle。周回を維持できればよいので低め（迎撃時のthrottle=1.0とは別物） */
+const PATROL_THROTTLE = 0.35;
+/** 哨戒中の一定舵角。ゼロ以外の値を固定で与え続けることで緩やかな円軌道になる（見張りの往復運動） */
+const PATROL_STEERING = 0.2;
+
 export async function simpleRuleBasedDecision(observation, self, memory) {
   const heading = observation?.position?.heading ?? 0;
   const position = observation?.position;
@@ -143,7 +148,7 @@ function decideDefender({ observation, self, position, heading, nearestOpposing,
       return { throttle: 0.5, steering: relativeBearingToSteering(Math.atan2(dy, dx), heading) };
     }
     // 近傍にいるときは一定の舵を切り続けて緩やかに周回する（見張り）
-    return { throttle: 0.35, steering: 0.2 };
+    return { throttle: PATROL_THROTTLE, steering: PATROL_STEERING };
   }
 
   // 防護対象すら無い（テスト等）場合のみ、旧挙動どおり直進する

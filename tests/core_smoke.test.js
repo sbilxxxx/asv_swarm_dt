@@ -116,7 +116,7 @@ async function testResetReturnsToSpawn({ World, EnvApi, createSceneGeometry, lat
   const { world, spawnLocal } = buildScenarioWorld({ World, createSceneGeometry, latLonToLocal });
   const env = new EnvApi(world, { dt: 0.1 });
 
-  env.reset({ scenario: 'tokyo_bay_minimal', seed: 1 });
+  env.reset({ scenario: 'tokyo_bay_minimal', episodeIndex: 1 });
 
   // 全艇を200step動かす（moveした状態を作る）
   const actions = {};
@@ -130,7 +130,7 @@ async function testResetReturnsToSpawn({ World, EnvApi, createSceneGeometry, lat
     assert.ok(moved, `${s.id} should have moved away from spawn before reset`);
   }
 
-  env.reset({ scenario: 'tokyo_bay_minimal', seed: 2 });
+  env.reset({ scenario: 'tokyo_bay_minimal', episodeIndex: 2 });
 
   for (const s of spawnLocal) {
     const i = world.state.indexOf(s.id);
@@ -152,7 +152,7 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
   world.spawn({ id: 'intruder-1', faction: 'intruder', x, y, heading: 0, agent: {} });
 
   const env = new EnvApi(world, { dt: 0.1 });
-  env.reset({ scenario: 'forced-breach', seed: 1 });
+  env.reset({ scenario: 'forced-breach', episodeIndex: 1 });
 
   const result = env.step({}); // アクション無し＝動かない。距離0なので即breach
   assert.strictEqual(result.done, true, 'breach episode should be done on first step');
@@ -177,7 +177,7 @@ async function testBreachedOutcomeAndSecondEpisode({ World, EnvApi }) {
   console.log('OK: forced breach scenario ends the episode with outcome=breached, reward=-1');
 
   // 2エピソード目: reset()後に同じWorldインスタンスで再度回せること
-  env.reset({ scenario: 'forced-breach', seed: 2 });
+  env.reset({ scenario: 'forced-breach', episodeIndex: 2 });
   const i = world.state.indexOf('intruder-1');
   approxEqual(world.state.x[i], x, 1e-6, 'intruder-1.x after second reset');
   approxEqual(world.state.y[i], y, 1e-6, 'intruder-1.y after second reset');
@@ -196,7 +196,7 @@ async function testDefendedOutcomeAndDeadIntruderStopsMoving({ World, EnvApi }) 
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
   const env = new EnvApi(world, { dt: 0.1 });
-  env.reset({ scenario: 'forced-defend', seed: 1 });
+  env.reset({ scenario: 'forced-defend', episodeIndex: 1 });
 
   const result = env.step({});
   assert.strictEqual(result.done, true, 'defended episode should be done on first step');
@@ -231,7 +231,7 @@ async function testStepAfterDoneIsIdempotent({ World, EnvApi }) {
   world.spawn({ id: 'intruder-1', faction: 'intruder', x: 30, y: 0, heading: 0 });
 
   const env = new EnvApi(world, { dt: 0.1 });
-  env.reset({ scenario: 'forced-defend-idempotent', seed: 1 });
+  env.reset({ scenario: 'forced-defend-idempotent', episodeIndex: 1 });
 
   const first = env.step({}); // 1歩目でintercept -> done=true, outcome='defended'
   assert.strictEqual(first.done, true, 'first step should already be done');
@@ -271,7 +271,7 @@ async function testTimeoutOutcome({ World, EnvApi, missionMod }) {
 
   const dt = 10; // 大きめのdtで短いループ数で時間切れに到達させる
   const env = new EnvApi(world, { dt });
-  env.reset({ scenario: 'forced-timeout', seed: 1 });
+  env.reset({ scenario: 'forced-timeout', episodeIndex: 1 });
 
   let result;
   let guard = 0;
@@ -298,7 +298,7 @@ async function testLoggerStress({ World, EnvApi }) {
   }
 
   const env = new EnvApi(world, { dt: 0.1 }); // 2000step * 0.1s = 200s < EPISODE_TIME_LIMIT_S(240s)なのでdoneにならない
-  env.reset({ scenario: 'stress', seed: 1 });
+  env.reset({ scenario: 'stress', episodeIndex: 1 });
 
   const actions = {};
   for (const id of ids) actions[id] = { throttle: 0.2, steering: 0.05 };
@@ -336,7 +336,7 @@ async function testMultiEpisodeOutcomeVariety({ World, EnvApi, createSceneGeomet
   const NUM_EPISODES = 6;
   const outcomes = [];
   for (let ep = 1; ep <= NUM_EPISODES; ep++) {
-    const result = await runOneEpisode(world, env, { scenario: scenario.name, seed: ep });
+    const result = await runOneEpisode(world, env, { scenario: scenario.name, episodeIndex: ep });
     outcomes.push(result.info.outcome);
   }
 

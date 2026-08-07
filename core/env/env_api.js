@@ -34,7 +34,8 @@ export class EnvApi {
    * エピソードをspawn時の状態へ戻し、新しいログエピソードを開始する。
    * 2エピソード目以降も同じWorldインスタンスで反復できることがGym風APIの前提
    * （docs/review-findings-2026-08-07.md A-6）。
-   * @param {{scenario?: string, seed?: number|string}} [meta] - ログのエピソードヘッダに残すメタデータ
+   * @param {{scenario?: string, episodeIndex?: number|string}} [meta] - ログのエピソードヘッダに残すメタデータ
+   *   （episodeIndexは呼び出し側が管理する通し番号。RNGのシードではない）
    */
   reset(meta = {}) {
     this.world.resetEntities();
