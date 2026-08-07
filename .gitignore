@@ -2,3 +2,4 @@
 node_modules/
 *.log
 .devtools/*.png
+.devtools/gif-frames-*/

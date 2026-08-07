@@ -8,7 +8,8 @@ const path = require('path');
 const puppeteer = require('puppeteer');
 
 const ROOT = path.resolve(__dirname, '..');
-const PORT = 8971;
+// 複数のキャプチャを並行実行するとポートが衝突するため、環境変数で上書きできるようにする
+const PORT = parseInt(process.env.SHOT_PORT || '8971', 10);
 
 const MIME = {
   '.html': 'text/html',

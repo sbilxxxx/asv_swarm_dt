@@ -86,8 +86,10 @@ export function renderRadarPanel(reading, selfHeadingRad = 0) {
 
   for (const c of reading.contacts) {
     const relBearing = normalizeAngle(c.bearingRad - selfHeadingRad);
-    // ヘディングアップ: 自艇の正面(relBearing=0)を画面の上(-y)にする
-    const px = cx + Math.sin(relBearing) * (c.rangeM / maxRangeM) * radius;
+    // ヘディングアップ表示。方位は数学規約（東=0・反時計回り正）なので、
+    // relBearing>0 は左舷（ポート）side になる。画面左が左舷なので sin は減算する。
+    // ここを加算にすると右舷の目標が画面左に出る左右反転バグになる。
+    const px = cx - Math.sin(relBearing) * (c.rangeM / maxRangeM) * radius;
     const py = cy - Math.cos(relBearing) * (c.rangeM / maxRangeM) * radius;
 
     ctx.fillStyle = c.faction === 'defender' ? '#4fd6ff' : '#ff5a5a';

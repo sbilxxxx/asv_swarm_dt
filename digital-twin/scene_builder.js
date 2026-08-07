@@ -12,6 +12,35 @@
 import * as THREE from 'three';
 import { buildLandmarks } from './landmarks.js';
 
+/**
+ * 波の合成パラメータ（単一の情報源）。
+ * 水面の頂点シェーダーと、船を波に追従させるJS側の計算の両方がこの定義を使う。
+ * どちらか片方だけ変更すると「水面と船の波が食い違う」ため、必ずここだけを編集する。
+ * 各項: 振幅 * sin(kx*x + ky*y + speed*t)
+ */
+const WAVE_TERMS = [
+  { amp: 0.35, kx: 0.045, ky: 0.0, speed: 1.3 },
+  { amp: 0.22, kx: 0.0, ky: 0.07, speed: -0.9 },
+  { amp: 0.3, kx: 0.02, ky: 0.02, speed: 0.55 },
+];
+
+/**
+ * 水面高さ（ワールドXZ平面上の点における波の変位）。
+ * 引数は水面メッシュのローカル座標系（回転前のXY）に合わせる。
+ */
+function waveHeightAt(x, y, t) {
+  let sum = 0;
+  for (const w of WAVE_TERMS) {
+    sum += w.amp * Math.sin(w.kx * x + w.ky * y + w.speed * t);
+  }
+  return sum;
+}
+
+/** GLSLはintとfloatの暗黙変換をしないため、必ず小数点付きのリテラルとして埋め込む */
+function glslFloat(n) {
+  return Number.isInteger(n) ? `${n}.0` : `${n}`;
+}
+
 const WATER_VERTEX_SHADER = `
   uniform float uTime;
   varying vec3 vWorldPos;
@@ -20,9 +49,10 @@ const WATER_VERTEX_SHADER = `
   void main() {
     vec3 pos = position;
     float wave =
-      sin(pos.x * 0.045 + uTime * 1.3) * 0.55 +
-      sin(pos.y * 0.07 - uTime * 0.9) * 0.35 +
-      sin((pos.x + pos.y) * 0.02 + uTime * 0.55) * 0.5;
+${WAVE_TERMS.map(
+  (w) =>
+    `      ${glslFloat(w.amp)} * sin(pos.x * ${glslFloat(w.kx)} + pos.y * ${glslFloat(w.ky)} + uTime * ${glslFloat(w.speed)})`
+).join(' +\n')};
     pos.z += wave;
     vWave = wave;
     vec4 worldPos = modelMatrix * vec4(pos, 1.0);
@@ -95,10 +125,22 @@ function createWakeTexture() {
  * センサーカメラ（camera_sensor.js）の距離定数もこの値に揃えて調整すること。
  */
 export const SHIP_VISUAL_SCALE = 2.2;
-/** 船の基準点（グループ原点）の水面からの高さ。ブリッジカメラの基準にも使う。 */
-export const SHIP_DECK_HEIGHT = 1.1 * SHIP_VISUAL_SCALE;
+/**
+ * 船の基準点（グループ原点）の水面からの高さ。ブリッジカメラの基準にも使う。
+ * 船体ジオメトリは原点まわり ±0.5*SHIP_VISUAL_SCALE に広がるため、この値が大きすぎると
+ * 船が水面から浮いて見える（実測で判明）。喫水線が船体下部に来る高さにする。
+ */
+export const SHIP_DECK_HEIGHT = 0.3 * SHIP_VISUAL_SCALE;
 
-/** 船体形状（Yを船首方向とするローカル座標）。cone時代の外部回転規約（rotation.x=90°→rotation.zで艏首方位）を踏襲する。 */
+/**
+ * 船体形状。ジオメトリ側で向きを正規化し、船グループは
+ * 「+X が船首、+Y が上、±Z が舷側」という素直な座標系で扱えるようにする。
+ *
+ * 以前はグループに rotation.x = π/2 を掛けたまま子要素を配置していたため、
+ * 上下と前後の軸が入れ替わり、航跡が垂直の光柱になる不具合を生んでいた。
+ * ここで正規化しておけば、rotation.y = 針路 / rotation.x = ピッチ / rotation.z = ロール
+ * がそのまま使える。
+ */
 function buildHullGeometry() {
   const s = SHIP_VISUAL_SCALE;
   const shape = new THREE.Shape();
@@ -117,7 +159,10 @@ function buildHullGeometry() {
     bevelSize: 0.18 * s,
     bevelSegments: 1,
   });
-  geo.translate(0, 0, -0.5 * s);
+  geo.translate(0, 0, -0.5 * s); // 押し出し方向の中心を原点へ
+  // 押し出し直後は「+Y=船首 / +Z=船体厚み」。これを「+X=船首 / +Y=上」へ正規化する
+  geo.rotateX(-Math.PI / 2);
+  geo.rotateY(-Math.PI / 2);
   return geo;
 }
 
@@ -192,7 +237,10 @@ export function buildThreeScene(canvas, scene, options = {}) {
     vertexShader: WATER_VERTEX_SHADER,
     fragmentShader: WATER_FRAGMENT_SHADER,
   });
-  const waterGeo = new THREE.PlaneGeometry(span * 1.8, span * 1.8, 120, 120);
+  // 水面は視界いっぱいに広げる。狭いと船上のブリッジカメラから水面の縁が見えてしまう
+  // （海が「板」に見え、デジタルツインとしての説得力を損なう）。
+  const waterExtent = Math.max(span * 4, 9000);
+  const waterGeo = new THREE.PlaneGeometry(waterExtent, waterExtent, 160, 160);
   const water = new THREE.Mesh(waterGeo, waterMaterial);
   water.rotation.x = -Math.PI / 2;
   water.position.set(center.x, 0, -center.y);
@@ -228,37 +276,55 @@ export function buildThreeScene(canvas, scene, options = {}) {
     const lightColor = faction === 'defender' ? 0x4fd6ff : 0xff5a5a;
 
     const s = SHIP_VISUAL_SCALE;
+    // 座標系: +X が船首、+Y が上、±Z が舷側（ジオメトリ側で正規化済み）
     const group = new THREE.Group();
-    group.rotation.x = Math.PI / 2; // cone時代と同じ外部回転規約。以後は毎フレーム rotation.z のみ更新する
+    group.rotation.order = 'YXZ'; // ヨー(針路) → ピッチ → ロール の順で適用する
 
     const hull = new THREE.Mesh(hullGeometry, new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.4, metalness: 0.1 }));
     hull.castShadow = true;
     hull.receiveShadow = true;
     group.add(hull);
 
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(1.1 * s, 0.9 * s, 1.0 * s), deckMaterial);
-    deck.position.set(0, 0.55 * s, -0.8 * s);
+    // 操舵室（ブリッジ）。カメラの搭載位置に対応する
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(1.0 * s, 0.9 * s, 1.1 * s), deckMaterial);
+    deck.position.set(-0.55 * s, 0.85 * s, 0);
     deck.castShadow = true;
     group.add(deck);
 
+    // 窓（前面）。単色の箱に一本入れるだけで「船らしさ」が出る
+    const windshield = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08 * s, 0.32 * s, 0.95 * s),
+      new THREE.MeshStandardMaterial({ color: 0x17323f, roughness: 0.25, metalness: 0.4 })
+    );
+    windshield.position.set(-0.12 * s, 0.95 * s, 0);
+    group.add(windshield);
+
     // センサーマスト＋ドーム: ASVが観測機器を積んでいることを示す装飾（レーダー/カメラの実体ではない）
     const mastMat = new THREE.MeshStandardMaterial({ color: 0xd7dede, roughness: 0.5 });
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * s, 0.08 * s, 1.0 * s, 6), mastMat);
-    mast.position.set(0, 1.5 * s, -0.8 * s);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * s, 0.08 * s, 1.1 * s, 6), mastMat);
+    mast.position.set(-0.75 * s, 1.75 * s, 0);
     group.add(mast);
     const sensorDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22 * s, 10, 6, 0, Math.PI * 2, 0, Math.PI / 1.7),
+      new THREE.SphereGeometry(0.24 * s, 10, 6, 0, Math.PI * 2, 0, Math.PI / 1.7),
       new THREE.MeshStandardMaterial({ color: 0xf2f5f5, roughness: 0.3 })
     );
-    sensorDome.position.set(0, 2.0 * s, -0.8 * s);
+    sensorDome.position.set(-0.75 * s, 2.3 * s, 0);
     group.add(sensorDome);
+
+    // 陣営識別ストライプ（青=防御 / 赤=侵入）。船体側面に入れて遠目でも所属が分かるようにする
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(5.2 * s, 0.22 * s, 2.62 * s),
+      new THREE.MeshStandardMaterial({ color: lightColor, roughness: 0.5 })
+    );
+    stripe.position.set(0.1 * s, 0.42 * s, 0);
+    group.add(stripe);
 
     // 航海灯: 遠距離でも視認できる小さな発光点（実際の航海灯の役割も兼ねる）
     const navLight = new THREE.Mesh(
-      new THREE.SphereGeometry(0.35 * s, 8, 8),
-      new THREE.MeshStandardMaterial({ color: lightColor, emissive: lightColor, emissiveIntensity: 2.2 })
+      new THREE.SphereGeometry(0.28 * s, 8, 8),
+      new THREE.MeshStandardMaterial({ color: lightColor, emissive: lightColor, emissiveIntensity: 2.4 })
     );
-    navLight.position.set(0, 1.3 * s, -0.8 * s);
+    navLight.position.set(-0.75 * s, 2.75 * s, 0);
     group.add(navLight);
 
     // 加算合成で「光る航跡」にする（参考にした操船シミュレータのwakeスプライトと同じ狙い）
@@ -270,9 +336,13 @@ export function buildThreeScene(canvas, scene, options = {}) {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
+    // 航跡は水面に寝かせる。PlaneGeometryは既定でXY平面（＝立った状態）なので、
+    // rotation.x = -π/2 でXZ平面（水平）へ倒す。長辺(14*s)は回転後に船首尾方向へ向くよう
+    // rotation.z で90°回す。ここを間違えると垂直の光柱になる（実測で確認済み）。
     const wake = new THREE.Mesh(new THREE.PlaneGeometry(3.2 * s, 14 * s), wakeMat);
     wake.rotation.x = -Math.PI / 2;
-    wake.position.set(0, 0.05 * s, -8.5 * s);
+    wake.rotation.z = Math.PI / 2;
+    wake.position.set(-8.5 * s, -SHIP_DECK_HEIGHT + 0.25, 0);
     group.add(wake);
 
     scene3d.add(group);
@@ -281,30 +351,69 @@ export function buildThreeScene(canvas, scene, options = {}) {
     return entry;
   }
 
-  /** @param {Array<{id:string, faction:string, x:number, y:number, heading:number, speed:number}>} entities */
-  function updateShips(entities) {
+  // 俯瞰カメラが注視する点。
+  // 艇は互いに数百m離れて散開するため、船団の重心を注視すると全艇が画角外に出てしまう
+  // （実測: 3艇が約650m散開、オービット半径85mでは1艇も画角に収まらなかった）。
+  // このビューの目的はセンサー実証なので、HUDに表示している主役艇（focusEntityId）を追う。
+  // スウォーム全体の俯瞰は swarm-sim（2Dビュー）の役割。
+  const orbitTarget = new THREE.Vector2(center.x, center.y);
+  const focusEntityId = options.focusEntityId ?? null;
+
+  /**
+   * 船の位置・姿勢を更新する。
+   *
+   * 向きの規約: シミュレーション座標は x=東 / y=北、heading は東を0とする反時計回り。
+   * Three.js側は x=東 / z=-北。進行方向 (cos h, sin h)[sim] は (cos h, -sin h)[world XZ] に対応する。
+   * rotation.y は +X を (cos φ, -sin φ) へ向けるので、φ = heading をそのまま使えばよい
+   * （船体ジオメトリを +X=船首 に正規化してあるため）。
+   *
+   * 併せて波の高さ・勾配から上下動とピッチ・ロールを与え、水面に浮かんでいるように見せる。
+   * 波の式は水面シェーダーと同じ WAVE_TERMS を使うので、水面と船の動きが食い違わない。
+   */
+  function updateShips(entities, elapsedSeconds = 0) {
+    let target = null;
     for (const e of entities) {
       const { group, wakeMat } = ensureShip(e.id, e.faction);
-      group.position.set(e.x, 1.1 * SHIP_VISUAL_SCALE, -e.y);
-      group.rotation.z = -e.heading;
+
+      // 波の局所形状。水面メッシュのローカル座標（原点=center）に合わせて評価する
+      const wx = e.x - center.x;
+      const wy = e.y - center.y;
+      const h = waveHeightAt(wx, wy, elapsedSeconds);
+      const probe = 3.0; // 前後左右この距離の波高差から傾きを求める
+      const hFwd = waveHeightAt(wx + Math.cos(e.heading) * probe, wy + Math.sin(e.heading) * probe, elapsedSeconds);
+      const hAft = waveHeightAt(wx - Math.cos(e.heading) * probe, wy - Math.sin(e.heading) * probe, elapsedSeconds);
+      const hPort = waveHeightAt(wx - Math.sin(e.heading) * probe, wy + Math.cos(e.heading) * probe, elapsedSeconds);
+      const hStbd = waveHeightAt(wx + Math.sin(e.heading) * probe, wy - Math.cos(e.heading) * probe, elapsedSeconds);
+
+      group.position.set(e.x, SHIP_DECK_HEIGHT + h, -e.y);
+      group.rotation.y = e.heading;
+      group.rotation.x = Math.atan2(hStbd - hPort, 2 * probe) * 0.7; // ロール（'YXZ'順のため2番目がX）
+      group.rotation.z = -Math.atan2(hFwd - hAft, 2 * probe) * 0.7; // ピッチ（船首が波を上る）
+
       wakeMat.opacity = THREE.MathUtils.clamp((e.speed ?? 0) / 6, 0, 1) * 0.85;
+      if (e.id === focusEntityId) target = e;
+    }
+    if (!target && entities.length > 0) target = entities[0];
+    if (target) {
+      // 急なカメラ移動を避けるため補間で寄せる
+      orbitTarget.lerp(new THREE.Vector2(target.x, target.y), 0.08);
     }
   }
 
   let orbitAngle = 0;
-  // オービット半径は海岸線全体のspanではなく、focus（船団の重心）まわりの
-  // 一定の観覧距離にする。spanに比例させると陸地込みの広い範囲を回ってしまい、
-  // 肝心の船から離れすぎる時間帯ができてしまうため。
-  const orbitRadius = 85;
+  // 主役艇が画面内で十分な大きさに見える距離。遠すぎると数ピクセルになり、
+  // 近すぎると背景（湾・ランドマーク）が入らずデジタルツインらしさが伝わらない。
+  const orbitRadius = 46;
   function updateOverviewCamera(dt) {
-    orbitAngle += dt * 0.05;
+    orbitAngle += dt * 0.12;
     const radius = orbitRadius;
     overviewCamera.position.set(
-      center.x + Math.cos(orbitAngle) * radius,
-      radius * 0.32,
-      -center.y + Math.sin(orbitAngle) * radius
+      orbitTarget.x + Math.cos(orbitAngle) * radius,
+      radius * 0.34,
+      -orbitTarget.y + Math.sin(orbitAngle) * radius
     );
-    overviewCamera.lookAt(center.x, 4, -center.y);
+    // HUDパネルが画面上部を占めるため、注視点をやや上に置いて艇を画面下寄りに収める
+    overviewCamera.lookAt(orbitTarget.x, 9, -orbitTarget.y);
   }
 
   function render(elapsedSeconds) {

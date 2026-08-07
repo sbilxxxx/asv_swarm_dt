@@ -36,6 +36,11 @@ export class World {
     this.environment = config.environment ?? new CalmSeaEnvironment();
     this.agents = new Map(); // entityId -> AgentBase
     this.comms = new MessageBus();
+
+    /** 防護対象（侵入側の到達目標）。シナリオの protectedAsset から設定される。 */
+    this.protectedAsset = config.protectedAsset ?? null;
+    /** spawn仕様の控え。reset()でエピソードを初期状態へ戻すために必要。 */
+    this.spawnSpecs = [];
   }
 
   /**
@@ -46,7 +51,37 @@ export class World {
     const PlatformClass = platformRegistry[spec.platform ?? 'asv'];
     this.platformInstances.set(spec.id, new PlatformClass());
     if (spec.agent) this.agents.set(spec.id, spec.agent);
+    // 位置・針路のみ控える（agentインスタンスはreset後も再利用する）
+    this.spawnSpecs.push({ id: spec.id, x: spec.x, y: spec.y, heading: spec.heading ?? 0 });
     return index;
+  }
+
+  /**
+   * 全エンティティをspawn時の位置・針路へ戻し、通信・エージェント記憶を初期化する。
+   * EnvApi.reset() から呼ばれ、エピソードを反復実行できるようにする。
+   */
+  resetEntities() {
+    for (const spec of this.spawnSpecs) {
+      const i = this.state.indexOf(spec.id);
+      if (i < 0) continue;
+      this.state.x[i] = spec.x;
+      this.state.y[i] = spec.y;
+      this.state.heading[i] = spec.heading;
+      this.state.speed[i] = 0;
+      this.state.alive[i] = 1;
+    }
+    this.clock = 0;
+    this.comms = new MessageBus();
+    for (const agent of this.agents.values()) {
+      agent.memory = [];
+      agent.lastAction = null;
+    }
+  }
+
+  observe(entityId, sensorType) {
+    const sensor = this.sensors[sensorType];
+    if (!sensor) throw new Error(`Unknown sensor type: ${sensorType}`);
+    return sensor.observe(this, entityId);
   }
 
   observe(entityId, sensorType) {

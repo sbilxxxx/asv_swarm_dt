@@ -30,8 +30,11 @@ async function main() {
     y: spawnLocal.reduce((sum, s) => sum + s.local.y, 0) / spawnLocal.length,
   };
 
+  // HUDにセンサー値を表示する艇を主役とし、3Dカメラも同じ艇を追う（表示の一貫性）
+  const heroId = scenario.spawns[0].id;
+
   const canvas = document.getElementById('scene-canvas');
-  const three = buildThreeScene(canvas, scene, { focus });
+  const three = buildThreeScene(canvas, scene, { focus, focusEntityId: heroId });
   const cameraSensor = new ThreeCameraSensor(three);
   const world = new World({ scene, cameraSensor, capacity: scenario.spawns.length });
   window.__debug = { three, world, focus, scene }; // devtools確認用フック
@@ -47,7 +50,6 @@ async function main() {
     });
   }
 
-  const heroId = scenario.spawns[0].id;
   let camTick = 0;
   let lastT = performance.now();
   let elapsed = 0;
@@ -69,7 +71,7 @@ async function main() {
     }
     world.clock += dt;
 
-    three.updateShips(world.state.snapshot());
+    three.updateShips(world.state.snapshot(), elapsed);
     three.updateOverviewCamera(dt);
     three.render(elapsed);
 
