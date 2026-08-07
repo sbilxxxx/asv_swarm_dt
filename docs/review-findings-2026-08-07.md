@@ -25,9 +25,9 @@
 | A-3 | **航跡スプライトが船の18.7m上空に浮いている**。`wake.position.set(0, 0.05*s, -8.5*s)` の local -Z が回転後に world +Y になる | 実測 dy=+18.7m | **対応済** — 新座標系で水面に寝かせて配置 |
 | A-4 | **レーダーPPIが左右鏡像**。`hud.js` の `px = cx + sin(rel)*r` は方位が「北から時計回り」の場合のみ正しい。本リポジトリは数学規約（東0°・CCW正）なので右舷の目標が画面左に出る | intruder-1（相対方位-76.3°=右舷正横）が screen-LEFT に描画 | **対応済** — `px = cx - sin(rel)*r` に修正 |
 | A-5 | **swarm-simのシミュレーション速度がモニタのリフレッシュレート依存**。`env_api.js` の `dt = 0.5` 固定 × requestAnimationFrame毎に1 step。60Hzで30倍速。また0.5s刻みは最大回頭28.6°/stepと粗い。`digital-twin/main.js` は同じASV運動学を可変dt（≤0.1s）で積分するため、**同一coreを謳いながら2つのViewで物理の刻みが異なる**（FR3の精神に反する） | 待機1.5秒でt=29.5（約20倍）、6秒でt=156 | **未対応** |
-| A-6 | **`reset()` がエピソードを再初期化しない**。clockとログの初期化のみ。Gym風APIと言いながら2エピソード目が回せない | 200 step走行後に`reset()`しても位置は(260.6,-264.9)のまま（スポーン位置(-150,-100)に戻らない） | **対応中** — `World.resetEntities()` を実装済み、`EnvApi.reset()` からの呼び出しは未接続 |
+| A-6 | **`reset()` がエピソードを再初期化しない**。clockとログの初期化のみ。Gym風APIと言いながら2エピソード目が回せない | 200 step走行後に`reset()`しても位置は(260.6,-264.9)のまま（スポーン位置(-150,-100)に戻らない） | **対応済** — `EnvApi.reset(meta)` が `World.resetEntities()` を呼んでから新しいログエピソードを開始するよう接続。`tests/core_smoke.test.js` の `testResetReturnsToSpawn` / `testBreachedOutcomeAndSecondEpisode` で2エピソード連続実行を回帰確認 |
 | A-7 | **`coord.js` のモジュールグローバルorigin**。別originのシナリオで`createSceneGeometry()`を呼ぶと既存ワールドのGNSSが化ける。「グローバル変数非依存・並列実行を妨げない」という自らの設計原則に違反 | 実測: (35.45,139.75)→(34.00,133.50)に変化 | **未対応** |
-| A-8 | **`EntityState.indexOf` がaliveを見ない、そもそも死亡経路が無い**。alive=0にするAPIがリポジトリ全体に存在しない。snapshot/radar/commsの`!alive[j]`スキップは現状デッドコード | 手動でalive=0にしても`indexOf`は生きたインデックスを返す | **一部対応** — `mission.js` で撃破時に alive=0 にする経路を追加。`indexOf` 自体は未修正 |
+| A-8 | **`EntityState.indexOf` がaliveを見ない、そもそも死亡経路が無い**。alive=0にするAPIがリポジトリ全体に存在しない。snapshot/radar/commsの`!alive[j]`スキップは現状デッドコード | 手動でalive=0にしても`indexOf`は生きたインデックスを返す | **対応済** — `indexOf`自体はaliveを見ない仕様のまま維持（`resetEntities()`が死亡エンティティを見つけて復活させる必要があるため）。ガードは適用箇所である`EnvApi.step()`のaction適用ループに追加し、`alive[i]===0`の艇へはplatform.step()を呼ばないようにした。`mission.js`の撃破経路と合わせて、死亡エンティティが実際に停止することを`tests/core_smoke.test.js`で確認 |
 | A-9 | **boundsの定義と実データの矛盾**。`scene_format.js` はboundsを「coastline＋運用エリア」と定義し警告まで書いているが、シナリオJSONに `spawnsAreaLatLon` が無く、全スポーン（y≈-100〜-300m）がbounds（minY≈+250m）の外。さらに `manual_coastline.js` は `spawnsAreaLatLon` を`createSceneGeometry`に渡し忘れ | 2D表示は横長スケールのため偶然救われているだけ | **未対応** |
 
 ---
@@ -41,7 +41,7 @@
 | B-3 | **`environment.sample()` 呼び出しゼロ**。`world.js` で保持するだけで `asv.js` の運動学は環境力を参照しない。**波サロゲートモデルへの「差し替え口」は、差し替えても何も変わらない口** | **未対応** |
 | B-4 | **`obstacles` はスキーマのみ**。型定義以外に参照ゼロ。3D/2Dとも描画されず、衝突判定も無く、シナリオJSONにデータも無い | **未対応** |
 | B-5 | **AUV「登録するだけで済む」は不成立**。`EntityState` に深度(z)が無く、radar/gnss/commsも2D前提。実際はstate・センサーの改修が必要 | **未対応**（ドキュメントの記述を正直にするだけでも可） |
-| B-6 | **FR8ログの実質未達**。`{t, actions, observation}` のみで、FR8が明記する報酬相当の評価値・エピソード終了(doneは常にfalse)・シード・シナリオメタデータが無い。`toJson()` の呼び出し元もゼロで、記録は取り出す手段のないままメモリに溜まり捨てられる。**3隻2000 stepで9.7MB、30隻2000 stepで `RangeError: Invalid string length` でクラッシュ**（1 step≈213KB） | **一部対応** — `mission.js` で reward/done/outcome を算出可能に。ログ形式のJSONL化とダウンロード導線は未対応 |
+| B-6 | **FR8ログの実質未達**。`{t, actions, observation}` のみで、FR8が明記する報酬相当の評価値・エピソード終了(doneは常にfalse)・シード・シナリオメタデータが無い。`toJson()` の呼び出し元もゼロで、記録は取り出す手段のないままメモリに溜まり捨てられる。**3隻2000 stepで9.7MB、30隻2000 stepで `RangeError: Invalid string length` でクラッシュ**（1 step≈213KB） | **対応済（coreの記録形式・reward/done/outcome側）** — `episode_logger.js` をネスト保存からper-agentフラット行のJSON Lines（`episode_start`/`step`/`episode_end`）へ再設計し、`toJson()`は廃止して`toJsonl()`に置換。`EnvApi.step()`が`evaluateMission()`のreward/done/outcomeを各stepの生存エージェント行へ書き込み、`reset(meta)`が`scenario`/`seed`等をエピソードヘッダ行へ渡す。`tests/core_smoke.test.js`の`testLoggerStress`で30隻×2000 stepを実行し、`toJsonl()`がクラッシュせず全60,001行が`JSON.parse`できることを確認（約15.4MB）。**UIのダウンロードボタン・Node側ファイル書き出しは別タスク（View側）の作業範囲として未対応のまま** |
 | B-7 | **LLM/VLM/VLAのコードが1行も無い**。`decideFn` の注入口は良い設計だが、プロンプト生成・出力パース・Ollama呼び出しの実装例が皆無。GPU申請の「VLM推論を回す」との距離は認識しておくべき（**現状、GPUで回す推論対象が存在しない**） | **未対応** |
 | B-8 | **「海域を固定しない」原則と `landmarks.js` の矛盾**。`scene_builder.js` が無条件に `buildLandmarks()`（東京タワー・レインボーブリッジ・富士山・お台場を絶対座標でハードコード）を追加。シナリオを別海域に差し替えても東京の景観が描かれる | **未対応** |
 | B-9 | **運用リスク: 未コミット改善がGitHub未反映**。審査員がURLで見る公開デモは旧版 | **要注意** — 作業のたびに push すること |
@@ -94,10 +94,10 @@
 | 1 | ローカル改善のcommit & push。申請URLの実体を最新化 | ~10分 | **要実施** |
 | 2 | 3D船の回転規約修正＋子メッシュ座標の再定義＋規約のコメント明文化 | ~1時間 | **対応済** |
 | 3 | レーダー左右反転修正と、GNSS headingの北基準CW・0〜360°正規化表示（`gnss.js`は数学規約の生値で360°超えも表示される） | ~30分 | **一部対応**（レーダーのみ。GNSS表示は未対応） |
-| 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応中** |
+| 4 | **[最重要]** 2Dに「攻防のゲーム」を入れる: 保護対象＋intruderの目標到達行動＋防御側の捕捉判定＋done/reward＋エピソード終了で自動リセット。**これ1つで終了条件・報酬・エピソード反復が揃い、FR8ログが学習データの体裁になり、GPU申請の物語（反復対戦→戦術学習）が画面で成立する**。費用対効果が最大 | ~半日 | **対応済（core側）** — `EnvApi.step()`が`evaluateMission()`を呼び`{observation, reward, done, info:{outcome, events}}`を返す。`EnvApi.reset()`が`World.resetEntities()`を呼びエピソード反復が実際に機能。dtも0.1sへ変更（旧0.5sは粗すぎた）。**swarm-sim側でdoneを見て自動リセットするView配線（2D画面での自動リプレイ）は別タスク** |
 | 5 | headlessランナー同梱（60行程度のNodeスクリプト）＋READMEに実測steps/s記載。「GPUで並列に回せる」を宣言から実証に変える | ~1-2時間 | **未対応** |
 | 6 | coord.jsの脱シングルトン化。originをSceneGeometryに持たせる | ~1時間 | **未対応** |
-| 7 | ログ形式の再設計。観測全文ネスト保存をやめ、per-agentフラット行のJSONL＋UIダウンロード導線 | ~2時間 | **未対応** |
+| 7 | ログ形式の再設計。観測全文ネスト保存をやめ、per-agentフラット行のJSONL＋UIダウンロード導線 | ~2時間 | **一部対応** — `episode_logger.js`のper-agentフラットJSONL化（`toJsonl()`）は対応済。UIダウンロード導線は未対応（View側の別タスク） |
 | 8 | レジストリの配線。シナリオJSONに `"adapter": "manual_coastline"` を持たせ、両mainが registry 経由でロード。`spawnsAreaLatLon` も通す。`obstacles` は描画するか当面スキーマから外す | ~1時間 | **未対応** |
 | 9 | `environment.sample()` を `asv.js` のstepで参照し、波モデル差し込み口を「効く」状態にする。3Dカメラ演出の改善も併せて | ~2-3時間 | **未対応** |
 

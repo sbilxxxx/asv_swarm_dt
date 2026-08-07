@@ -83,10 +83,4 @@ export class World {
     if (!sensor) throw new Error(`Unknown sensor type: ${sensorType}`);
     return sensor.observe(this, entityId);
   }
-
-  observe(entityId, sensorType) {
-    const sensor = this.sensors[sensorType];
-    if (!sensor) throw new Error(`Unknown sensor type: ${sensorType}`);
-    return sensor.observe(this, entityId);
-  }
 }
