@@ -120,7 +120,10 @@ export class EnvApi {
    */
   _reportContacts() {
     this.lastCommsEvents = [];
-    for (const id of this.world.agents.keys()) {
+    const state = this.world.state;
+    for (let k = 0; k < state.count; k++) {
+      if (!state.alive[k]) continue;
+      const id = state.id[k];
       const radar = this.world.observe(id, 'radar');
       if (!radar || radar.contacts.length === 0) continue;
       const nearest = [...radar.contacts].sort((a, b) => a.rangeM - b.rangeM)[0];
@@ -148,14 +151,22 @@ export class EnvApi {
   _observationForAll() {
     this._reportContacts();
     const obs = {};
-    for (const id of this.world.agents.keys()) {
-      const i = this.world.state.indexOf(id);
+    const state = this.world.state;
+    // エージェント登録の有無ではなく「生存している艇」を基準にする。センサーは艇に付く
+    // ものであり、v2 では追従制御の艇がエージェントオブジェクトを持たないため
+    // （docs/l0-llm-agent-plan.md Task 3）。死亡艇のセンサーは観測を返さない。
+    for (let i = 0; i < state.count; i++) {
+      if (!state.alive[i]) continue;
+      const id = state.id[i];
+      const radar = this.world.observe(id, 'radar');
+      // 統合図の材料: 各艇のレーダーを自陣営のトラックストアへ流し込む
+      this.world.tracks[state.faction[i]]?.updateFromRadar(id, { x: state.x[i], y: state.y[i] }, radar);
       obs[id] = {
         gnss: this.world.observe(id, 'gnss'),
-        radar: this.world.observe(id, 'radar'),
+        radar,
         messages: this.world.comms.receive(id),
-        // 自艇の位置・針路（ローカル座標）。相対方位から操舵量を計算するために必要。
-        position: { x: this.world.state.x[i], y: this.world.state.y[i], heading: this.world.state.heading[i] },
+        // 自艇の位置・針路・速度（ローカル座標）。相対方位から操舵量を計算するために必要。
+        position: { x: state.x[i], y: state.y[i], heading: state.heading[i], speed: state.speed[i] },
         // 防護対象（侵入側の目標／防御側の哨戒基地）。未設定シナリオではnull（mission.jsのbreach判定もnull時はスキップされる）。
         protectedAsset: this.world.protectedAsset ? { ...this.world.protectedAsset } : null,
         // 現在のエピソード番号（EpisodeLogger.startEpisode()が発番）。エージェント側がエピソードごとに

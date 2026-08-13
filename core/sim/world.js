@@ -13,6 +13,7 @@ import { RadarSensor } from './sensors/radar.js';
 import { UnimplementedCameraSensor } from './sensors/camera.js';
 import { CalmSeaEnvironment } from './environment/calm_sea.js';
 import { MessageBus } from './comms.js';
+import { FactionTracks } from './command/tracks.js';
 
 export class World {
   /**
@@ -38,6 +39,11 @@ export class World {
     this.environment = config.environment ?? new CalmSeaEnvironment();
     this.agents = new Map(); // entityId -> AgentBase
     this.comms = new MessageBus();
+    /** 陣営別の敵トラックストア（味方レーダーの統合。指揮官の視界の材料） */
+    this.tracks = {
+      defender: new FactionTracks('defender'),
+      intruder: new FactionTracks('intruder'),
+    };
 
     /** 防護対象（侵入側の到達目標）。シナリオの protectedAsset から設定される。 */
     this.protectedAsset = config.protectedAsset ?? null;
@@ -74,6 +80,8 @@ export class World {
     }
     this.clock = 0;
     this.comms = new MessageBus();
+    this.tracks.defender.reset();
+    this.tracks.intruder.reset();
     for (const agent of this.agents.values()) {
       agent.memory = [];
       agent.lastAction = null;
