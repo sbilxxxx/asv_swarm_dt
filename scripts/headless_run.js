@@ -68,7 +68,20 @@ function parseArgs(argv) {
  * --boats 2 → defender-1, defender-2のみでintruderが0隻）、evaluateMission()が
  * 初手で'defended'/'timeout'と誤判定して意味の無いsteps/sを出してしまう。
  */
-function synthesizeSpawns(baseSpawns, targetCount, { latLonToLocal, localToLatLon }) {
+/**
+ * 渦巻きの半径刻み。迎撃圏（INTERCEPT_RANGE_M=60m）・突破圏（ASSET_BREACH_RANGE_M=80m）より
+ * 十分大きく取る。60m 刻みだった頃は、合成された侵入艇が既存の防御艇のちょうど迎撃圏上に
+ * 生まれ、--boats 6 が1ステップで defended になっていた（エピソードとして成立しない）。
+ */
+const RING_STEP_M = 150;
+
+/**
+ * 合成された侵入艇を防護対象からこの距離まで押し出す。突破圏（80m）のすぐ外側に
+ * 生まれると、攻防が始まる前に breached になる（--boats 30 が実際にそうなっていた）。
+ */
+const MIN_ASSET_CLEARANCE_M = 250;
+
+function synthesizeSpawns(baseSpawns, targetCount, { latLonToLocal, localToLatLon, protectedAssetLocal = null }) {
   if (targetCount <= baseSpawns.length) return baseSpawns.slice(0, targetCount);
   const spawns = baseSpawns.slice();
   let n = 0;
@@ -76,13 +89,24 @@ function synthesizeSpawns(baseSpawns, targetCount, { latLonToLocal, localToLatLo
     const base = baseSpawns[n % baseSpawns.length];
     const ring = Math.floor(n / baseSpawns.length) + 1;
     const angle = (2 * Math.PI * n) / targetCount;
-    const radiusM = 60 * ring;
+    const radiusM = RING_STEP_M * ring;
     const faction = n % 2 === 0 ? 'defender' : 'intruder';
     const baseLocal = latLonToLocal(base.lat, base.lon);
-    const { lat, lon } = localToLatLon(
-      baseLocal.x + radiusM * Math.cos(angle),
-      baseLocal.y + radiusM * Math.sin(angle)
-    );
+    let px = baseLocal.x + radiusM * Math.cos(angle);
+    let py = baseLocal.y + radiusM * Math.sin(angle);
+    // 侵入艇が防護対象の目前に湧くと、指揮官が最初の指示を出す前に決着してしまう。
+    // 決定論を保つため乱数で振り直さず、アセットから見た同じ方位のまま外側へ押し出す。
+    if (faction === 'intruder' && protectedAssetLocal) {
+      const dx = px - protectedAssetLocal.x;
+      const dy = py - protectedAssetLocal.y;
+      const d = Math.hypot(dx, dy);
+      if (d < MIN_ASSET_CLEARANCE_M) {
+        const dir = d > 1e-9 ? { x: dx / d, y: dy / d } : { x: Math.cos(angle), y: Math.sin(angle) };
+        px = protectedAssetLocal.x + dir.x * MIN_ASSET_CLEARANCE_M;
+        py = protectedAssetLocal.y + dir.y * MIN_ASSET_CLEARANCE_M;
+      }
+    }
+    const { lat, lon } = localToLatLon(px, py);
     spawns.push({
       id: `${faction}-synth-${n + 1}`,
       faction,
@@ -139,6 +163,9 @@ async function main() {
   const spawns = synthesizeSpawns(scenario.spawns, boatsTarget, {
     latLonToLocal: scene.projection.latLonToLocal,
     localToLatLon: scene.projection.localToLatLon,
+    protectedAssetLocal: scenario.protectedAssetLatLon
+      ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
+      : null,
   });
 
   // 片方の陣営が0隻だと、evaluateMission()がintruder不在=defended（またはtimeout）を
@@ -211,7 +238,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('headless_run failed:', err.message);
-  process.exit(1);
-});
+// spawn合成は tests/command.test.js が単体で検証する（合成位置が迎撃圏・突破圏に
+// 入っていないこと）。require されたときにランナー本体まで走らせない。
+module.exports = { synthesizeSpawns };
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('headless_run failed:', err.message);
+    process.exit(1);
+  });
+}
