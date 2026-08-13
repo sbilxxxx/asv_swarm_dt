@@ -194,6 +194,144 @@ async function testBoatControllerFollowsOrders() {
   console.log('OK: boat controller follows move_to / intercept / patrol orders');
 }
 
+/* ===========================================================================
+ * 以下3つは Task 5（core/sim/command/decision_scheduler.js）の仕様であり、
+ * 実装が入るまで main() から呼ばない（呼ぶとモジュール未作成で落ちるため）。
+ *
+ * 実装を始めるときの手順:
+ *   1. main() の末尾で PENDING_TASK5_TESTS を回すようにする（red を確認）
+ *   2. decision_scheduler.js を書く
+ *   3. green を確認して、この囲みコメントごと削除する
+ *
+ * 内容は docs/time-model.md v2.0 に対応する:
+ *   - Lifecycle: §4（t_issue → t_apply）・§10（状態と操作）
+ *   - IssueTokens: §12（エピソード跨ぎの取り違え）＋§12.5（発行トークン）
+ *   - Deadline: §12.5（締切と不成立。既定 deadlineS=Infinity で L0 の挙動は不変）
+ * =========================================================================== */
+
+async function testDecisionSchedulerLifecycle() {
+  const { DecisionScheduler } = await import('../core/sim/command/decision_scheduler.js');
+  const s = new DecisionScheduler();
+  s.register('blue', { intervalS: 10, latencyS: 3 });
+  s.register('red', { intervalS: 10, latencyS: 3 });
+
+  // t=0: 両方発行対象
+  assert.deepStrictEqual(s.dueToIssue(0).sort(), ['blue', 'red']);
+  const blueToken = s.markIssued('blue', 0);
+  s.markIssued('red', 0);
+  assert.deepStrictEqual(s.dueToIssue(0), [], 'pending中は再発行しない');
+
+  // 結果が来る前に applyAtT へ達したら blocked（ブラウザの推論待ちの判定に使う）
+  assert.deepStrictEqual(s.dueToApply(2.9), []);
+  assert.deepStrictEqual(s.blockedAt(3.0).sort(), ['blue', 'red']);
+
+  // 結果を渡すと t_apply 以降に適用対象になる。t_apply より前には決してならない
+  s.provideResult('blue', { orders: [], intent: 'hold' }, blueToken);
+  assert.deepStrictEqual(s.dueToApply(2.9), [], '結果が来ていても t_apply 前は適用しない');
+  assert.deepStrictEqual(s.dueToApply(3.0), ['blue']);
+  assert.deepStrictEqual(s.blockedAt(3.0), ['red'], 'redはまだ未着');
+
+  const result = s.takeResult('blue');
+  assert.strictEqual(result.intent, 'hold');
+  assert.deepStrictEqual(s.dueToApply(3.0), [], 'take後は消える');
+
+  // 浮動小数の蓄積誤差に耐える（0.1を30回足した値は3.0と厳密一致しない）
+  const redToken = s.deciders.get('red').pending.token;
+  s.provideResult('red', { orders: [], intent: 'x' }, redToken);
+  let t = 0;
+  for (let i = 0; i < 30; i++) t += 0.1;
+  assert.deepStrictEqual(s.dueToApply(t), ['red'], `float-accumulated t=${t} must count as reaching 3.0`);
+  s.takeResult('red');
+
+  // 次の発行は nextIssueAtT（t=10）から。resetで全て初期化
+  assert.deepStrictEqual(s.dueToIssue(9.9), []);
+  assert.deepStrictEqual(s.dueToIssue(10.0).sort(), ['blue', 'red']);
+  s.reset();
+  assert.deepStrictEqual(s.dueToIssue(0).sort(), ['blue', 'red']);
+
+  console.log('OK: DecisionScheduler issues, blocks, applies at t_apply, and resets');
+}
+
+async function testDecisionSchedulerIssueTokens() {
+  const { DecisionScheduler } = await import('../core/sim/command/decision_scheduler.js');
+
+  // エピソードを跨いだ結果の取り違え（docs/time-model.md §12）。ブラウザは fire-and-forget
+  // なので、旧エピソードの推論が新エピソードの pending へ紛れ込みうる。
+  const s = new DecisionScheduler();
+  s.register('blue', { intervalS: 10, latencyS: 3 });
+  const staleToken = s.markIssued('blue', 0);
+  s.reset(); // エピソード終了
+  const freshToken = s.markIssued('blue', 0);
+  s.provideResult('blue', { orders: [], intent: 'STALE' }, staleToken);
+  assert.deepStrictEqual(s.dueToApply(3.0), [], '旧エピソードの結果は現在の pending を満たさない');
+  s.provideResult('blue', { orders: [], intent: 'fresh' }, freshToken);
+  assert.deepStrictEqual(s.dueToApply(3.0), ['blue']);
+  assert.strictEqual(s.takeResult('blue').intent, 'fresh');
+
+  // 同一エピソード内でも、発行ごとに別トークン（世代だけでは足りない）
+  const t2 = new DecisionScheduler();
+  t2.register('blue', { intervalS: 10, latencyS: 3 });
+  const first = t2.markIssued('blue', 0);
+  t2.provideResult('blue', { orders: [], intent: 'first' }, first);
+  t2.takeResult('blue');
+  const second = t2.markIssued('blue', 10);
+  t2.provideResult('blue', { orders: [], intent: 'late-first' }, first);
+  assert.deepStrictEqual(t2.dueToApply(13.0), [], '前サイクルのトークンでは書き込めない');
+  t2.provideResult('blue', { orders: [], intent: 'second' }, second);
+  assert.strictEqual(t2.takeResult('blue').intent, 'second');
+
+  console.log('OK: issue tokens reject results from a previous episode or cycle');
+}
+
+async function testDecisionSchedulerDeadline() {
+  const { DecisionScheduler } = await import('../core/sim/command/decision_scheduler.js');
+
+  // 既定は deadlineS=Infinity。L0 の挙動（全停止して待ち続ける）は変わらない
+  const never = new DecisionScheduler();
+  never.register('blue', { intervalS: 10, latencyS: 3 });
+  never.markIssued('blue', 0);
+  assert.deepStrictEqual(never.missedAt(1000), [], 'deadlineS=Infinity では不成立にならない');
+  assert.deepStrictEqual(never.blockedAt(1000), ['blue'], '代わりに blocked のまま待つ');
+
+  // 有限の締切: t_issue + deadlineS を過ぎたら不成立が確定する
+  const s = new DecisionScheduler();
+  s.register('blue', { intervalS: 10, latencyS: 3, deadlineS: 6, onMiss: 'default-order' });
+  const token = s.markIssued('blue', 20);
+  assert.deepStrictEqual(s.missedAt(25.9), [], '締切前は不成立ではない');
+  const missed = s.missedAt(26.0);
+  assert.strictEqual(missed.length, 1);
+  assert.strictEqual(missed[0].id, 'blue');
+  assert.strictEqual(missed[0].onMiss, 'default-order', '呼び出し側が挙動を選べるよう onMiss を伝える');
+
+  s.takeMissed('blue');
+  assert.deepStrictEqual(s.missedAt(26.0), [], 'take後は消える');
+  assert.deepStrictEqual(s.blockedAt(26.0), [], '不成立の解消後は blocked でもない');
+
+  // 遅れて届いた結果はトークンが一致しても捨てる（pending はもう無い）
+  s.provideResult('blue', { orders: [], intent: 'too late' }, token);
+  assert.deepStrictEqual(s.dueToApply(30), [], '不成立確定後に届いた結果は適用しない');
+  // 発行のリズムは崩さない: 次は nextIssueAtT（20+10）のまま
+  assert.deepStrictEqual(s.dueToIssue(29.9), []);
+  assert.deepStrictEqual(s.dueToIssue(30.0), ['blue']);
+
+  // 締切に間に合った結果は通常どおり発効する
+  const ok = new DecisionScheduler();
+  ok.register('blue', { intervalS: 10, latencyS: 3, deadlineS: 6 });
+  const okToken = ok.markIssued('blue', 0);
+  ok.provideResult('blue', { orders: [], intent: 'in time' }, okToken);
+  assert.deepStrictEqual(ok.dueToApply(3.0), ['blue']);
+  assert.deepStrictEqual(ok.missedAt(6.0), [], '発効済みの判断は不成立にならない');
+
+  console.log('OK: deadlineS turns a stalled decider into an explicit miss without breaking the issue rhythm');
+}
+
+/** Task 5 実装時に main() から回す（上の囲みコメント参照） */
+const PENDING_TASK5_TESTS = [
+  testDecisionSchedulerLifecycle,
+  testDecisionSchedulerIssueTokens,
+  testDecisionSchedulerDeadline,
+];
+
 async function testSynthesizedSpawnsAreNotBornDecided(core) {
   const { synthesizeSpawns } = require('../scripts/headless_run.js');
   const { INTERCEPT_RANGE_M, ASSET_BREACH_RANGE_M } = await import('../core/sim/mission.js');
@@ -243,6 +381,9 @@ async function main() {
   await testOrdersApplyAndDefaults(core);
   await testBoatControllerFollowsOrders();
   await testSynthesizedSpawnsAreNotBornDecided(core);
+
+  // Task 5（DecisionScheduler）の3テストは実装待ちのため、まだここから呼ばない。
+  // 下の PENDING_TASK5_TESTS を main() の最後で回すよう戻せば red から始められる。
   console.log('\nAll command tests passed.');
 }
 

@@ -5,6 +5,8 @@
 > 作成: 2026-08-12 / 版: **v2**（v1 を全面改訂）
 > 背景: [`review-findings-2026-08-07.md`](review-findings-2026-08-07.md) B-7「LLM/VLM/VLAのコードが1行も無い」の解消。
 >
+> **進捗（2026-08-13 時点）**: Task 2・3・4 は実装済み（ブランチ `feat/l0-command-hierarchy`）。Task 1 は Ollama にモデル未取得のため未着手。Task 5 はテストのみ `tests/command.test.js` に用意して実装待ち。詳細と再開手順は [`worklog-2026-08-13_l0-handoff.md`](worklog-2026-08-13_l0-handoff.md)。
+>
 > **⚠️ 実装前に必読 — 2026-08-13 の時間モデル v2.0 による差分**: [`time-model.md`](time-model.md) が v2.0 になり、本計画のコード例に対して3点の追加要件が生じている（[`development-roadmap.md`](development-roadmap.md) §4 の D-1/D-2/D-3）。要点は **Task 5 の `DecisionScheduler` に発行トークンを必須実装すること**、`register()` に `deadlineS`/`onMiss`/`latencyModel`/ステージ宣言を受け付けさせること、Task 8/9 で実測 t_wall をステージ別に記録すること。既定値のままなら本計画に書かれた挙動は変わらない。該当箇所は Task 5 Step 3 に注記した。
 
 **v1 からの変更（レビュー指摘による）:**
