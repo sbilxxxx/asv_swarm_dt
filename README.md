@@ -69,6 +69,35 @@ flowchart TB
   SIM --> LOG
 ```
 
+## 別環境で作業を再開する
+
+別PC（GPUマシン等）へ移す場合、リポジトリだけで足りるもの・別途用意が要るものは次のとおり。
+
+```bash
+git clone https://github.com/sbilxxxx/asv_swarm_dt.git
+cd asv_swarm_dt
+git branch -a                      # 作業中のブランチを確認（master とは限らない）
+node tests/core_smoke.test.js && node tests/command.test.js
+node scripts/headless_run.js --episodes 5
+```
+
+ルートに`package.json`は無く、`core/`・`tests/`・`scripts/`はNode v22だけで動く（npm依存ゼロ）。上のコマンドはcloneした直後にそのまま通る。
+
+**別途用意が必要なもの**:
+
+| | 何のために | 備考 |
+|---|---|---|
+| Node v22 | core・テスト・headless実行 | これだけあればシミュレータ本体は動く |
+| 静的サーバー（`npx serve .` / `python -m http.server`） | ブラウザ側（`digital-twin/`・`swarm-sim/`） | `file://`直開きは`fetch()`のCORSで動かない |
+| インターネット接続 | `digital-twin/`のThree.js（importmap経由でunpkgから取得） | `swarm-sim/`は外部依存なしで動く |
+| Ollama本体＋モデル（`ollama pull`） | LLM指揮官（`--blue llm`等）。リポジトリには含まれない | ブラウザから使う場合は`OLLAMA_ORIGINS=*`。**推論サーバは別ホストでよい**（下記） |
+| `.devtools/`で`npm install` | スクリーンショット駆動QA（puppeteer） | `node_modules/`はgitignore対象。見た目の変更をしないなら不要 |
+| Claude Code の superpowers プラグイン | [`docs/l0-llm-agent-plan.md`](docs/l0-llm-agent-plan.md)が指定する実装ワークフロー | 設計・計画の文脈自体は[`CLAUDE.md`](CLAUDE.md)を起点にリポジトリ内で完結する |
+
+**推論サーバを別ホストに置く構成**は設計上の想定内で、コード変更を伴わない。推論はOpenAI互換のHTTPエンドポイント越しに呼ぶため、`--llm-url`（ブラウザは`?llm=`）の向き先を変えるだけでよい。重要なのは、シムの展開を決めるのが実測レイテンシではなく**設定値`latencyS`**であること（[`docs/time-model.md`](docs/time-model.md) §5）。推論を速いマシンへ移してもシム結果は変わらず、変わるのは実行に要する実時間だけなので、「開発は手元・実行はGPU環境」と分けても実験の比較可能性が保たれる。
+
+ただしL1（VLM）では、意思決定のたびに`digital-twin/`のレンダリング画像が推論の入力になる。推論だけをリモートへ置くと判断ごとに画像が回線を渡るため、レンダリング（headless Chromium）も推論側へ同居させるか、転送時間を時間モデルのステージとして明示的に宣言する（[`docs/time-model.md`](docs/time-model.md) §12.5 のパイプライン宣言）。
+
 ## 実行方法
 
 ビルド不要のES Modulesで書かれているが、`fetch()`でシナリオJSONを読むためローカルの静的サーバー経由で開く必要がある（`file://`で直接開くとCORSエラーになる）。
