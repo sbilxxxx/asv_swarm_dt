@@ -159,7 +159,12 @@ async function main() {
   const protectedAsset = scenario.protectedAssetLatLon
     ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
     : null;
-  const world = new World({ scene, capacity: spawns.length, protectedAsset });
+  const world = new World({
+    scene,
+    capacity: spawns.length,
+    protectedAsset,
+    radarRangeM: scenario.sensors?.radarRangeM,
+  });
   for (const s of spawns) {
     const { x, y } = scene.projection.latLonToLocal(s.lat, s.lon);
     world.spawn({

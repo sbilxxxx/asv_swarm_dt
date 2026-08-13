@@ -40,7 +40,13 @@ async function main() {
   const protectedAsset = scenario.protectedAssetLatLon
     ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
     : null;
-  const world = new World({ scene, cameraSensor, capacity: scenario.spawns.length, protectedAsset });
+  const world = new World({
+    scene,
+    cameraSensor,
+    capacity: scenario.spawns.length,
+    protectedAsset,
+    radarRangeM: scenario.sensors?.radarRangeM,
+  });
   window.__debug = { three, world, focus, scene }; // devtools確認用フック
 
   for (const spawn of spawnLocal) {

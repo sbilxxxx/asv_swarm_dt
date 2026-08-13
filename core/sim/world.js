@@ -21,6 +21,7 @@ export class World {
    * @param {number} [config.capacity]
    * @param {import('./sensors/sensor_base.js').SensorBase} [config.cameraSensor] - 未指定時はUnimplementedCameraSensor
    * @param {import('./environment/environment_base.js').EnvironmentBase} [config.environment]
+   * @param {number} [config.radarRangeM] - レーダー探知距離。シナリオの sensors.radarRangeM から渡す
    */
   constructor(config) {
     this.scene = config.scene;
@@ -30,7 +31,8 @@ export class World {
     this.platformInstances = new Map(); // entityId -> platform instance
     this.sensors = {
       gnss: new GnssSensor(),
-      radar: new RadarSensor(),
+      // 探知距離はシナリオ（scenario.sensors.radarRangeM）から渡す。未指定なら従来既定値。
+      radar: new RadarSensor(config.radarRangeM ? { rangeM: config.radarRangeM } : {}),
       camera: config.cameraSensor ?? new UnimplementedCameraSensor(),
     };
     this.environment = config.environment ?? new CalmSeaEnvironment();

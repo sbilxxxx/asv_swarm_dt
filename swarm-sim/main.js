@@ -62,6 +62,7 @@ async function main() {
     protectedAsset: scenario.protectedAssetLatLon
       ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
       : null,
+    radarRangeM: scenario.sensors?.radarRangeM,
   });
 
   for (const spawn of scenario.spawns) {
