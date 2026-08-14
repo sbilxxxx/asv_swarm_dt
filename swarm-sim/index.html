@@ -26,6 +26,12 @@
     }
     #hud .hud-label { color: #6fb3c7; }
     #hud-tally { color: #d7e6ea; }
+    #hud-mode { color: #8fa8a4; }
+    /* 実行状態（進行中／推論待ち／不成立）。シムが止まっているのか壊れたのかを
+       ここだけ見て判別できるようにする（docs/time-model.md §9 ブラウザ側の停止） */
+    #hud-status { color: #7be08a; }
+    #hud-status.status-waiting { color: #9fc3ff; }
+    #hud-status.status-missed { color: #ff9d5c; }
     #download-log-btn {
       margin-left: auto;
       background: #16323a; color: #d7e6ea; border: 1px solid #2c5866;
@@ -43,6 +49,23 @@
       pointer-events: none;
     }
     #outcome-banner.hidden { display: none; }
+
+    /* 推論待ちオーバーレイ: blockedAt()が非空の間、シム時刻は止まる（docs/time-model.md §9）。
+       止まっていること・止めている指揮官・実時間の経過を明示し、「固まった／落ちた」と
+       見分けが付かない状態を作らない。経過秒数は毎フレーム更新されるので、
+       数字が動いていること自体がページが生きている証拠になる。 */
+    #wait-overlay {
+      position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 4;
+      padding: 8px 14px; border: 1px solid #4a76a8; border-radius: 6px;
+      background: rgba(26, 42, 68, 0.92); color: #9fc3ff;
+      font: 12px "SFMono-Regular", Consolas, monospace; line-height: 1.5; text-align: center;
+      animation: wait-pulse 1.1s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+    #wait-overlay.hidden { display: none; }
+    #wait-overlay .wait-title { font-weight: 700; letter-spacing: .04em; }
+    #wait-overlay .wait-detail { color: #6fb3c7; }
+    @keyframes wait-pulse { from { opacity: .65; } to { opacity: 1; } }
     #outcome-banner.outcome-defended { color: #4fb8d6; }
     #outcome-banner.outcome-breached { color: #e0708e; }
     #outcome-banner.outcome-timeout { color: #ffd678; }
@@ -56,12 +79,19 @@
         <span id="hud-episode" class="hud-label">Episode 1</span>
         <span id="hud-clock">t=0.0s</span>
         <span id="hud-tally">防衛 0 / 突破 0 / 時間切れ 0</span>
+        <span id="hud-mode">blue=scripted red=scripted</span>
+        <span id="hud-status">進行中</span>
         <button id="download-log-btn" type="button">ログDL (.jsonl)</button>
+      </div>
+      <div id="wait-overlay" class="hidden">
+        <div class="wait-title">指揮官の推論待ち — シムを停止中</div>
+        <div class="wait-detail" id="wait-detail"></div>
+        <div class="wait-detail" id="wait-elapsed"></div>
       </div>
       <div id="outcome-banner" class="hidden"></div>
     </div>
     <div id="log-panel">
-      <h3>Agent Log</h3>
+      <h3>Command Log</h3>
       <div id="log-entries"></div>
     </div>
   </div>
