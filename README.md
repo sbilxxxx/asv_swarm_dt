@@ -36,7 +36,7 @@
 | [`core/`](core/) | データ取り込み・シーン表現・シミュレーション・意思決定・学習データ互換ログを担う共有ロジック（DOM非依存、Node/ブラウザ両対応） |
 | [`digital-twin/`](digital-twin/) | 3D海域DT（センサー実証: カメラ・レーダー・GNSS、Three.js） |
 | [`swarm-sim/`](swarm-sim/) | 2Dバードビューの戦術マップ・マルチASVスウォーム攻防（Canvas 2D） |
-| [`scripts/`](scripts/) | ヘッドレス実行ランナー（[`headless_run.js`](scripts/headless_run.js)）・推論サーバの単体計測ツール（[`llm_probe.js`](scripts/llm_probe.js)） |
+| [`scripts/`](scripts/) | ヘッドレス実行ランナー（[`headless_run.js`](scripts/headless_run.js)）・推論サーバの単体計測ツール（[`llm_probe.js`](scripts/llm_probe.js)）・実行結果の分析レポート生成（[`analyze_run.js`](scripts/analyze_run.js)） |
 | [`docs/`](docs/) | 設計書・時間モデル・実験ログ・独立レビュー記録・品質向上計画 |
 
 ```mermaid
@@ -145,6 +145,32 @@ node scripts/headless_run.js --help
 併せて**指揮官の判断サイクルの検証行**（発行数・発効数・`t_issue + latencyS`に厳密一致した件数・最大ずれ）も出力する。
 艇の追従制御（`core/sim/command/boat_controller.js`）は毎ステップ・瞬時で、
 遅延を持つのは指揮官の判断だけである（[`docs/time-model.md`](docs/time-model.md) §6）。
+
+### 実行結果の分析
+
+書き出したJSONLを読んで、単一ファイルのHTMLレポートを作る
+（[`scripts/analyze_run.js`](scripts/analyze_run.js)、npm依存なし・外部CDNなし）。
+
+```bash
+# 比較したいアームをそれぞれログ付きで回す
+node scripts/headless_run.js --blue scripted --red scripted --boats 3 --episodes 25 --quiet \
+  --out logs/ss.jsonl --decision-log logs/ss-decisions.jsonl
+node scripts/headless_run.js --blue llm --red scripted --model qwen2.5:7b --boats 3 --episodes 25 --quiet \
+  --out logs/ls.jsonl --decision-log logs/ls-decisions.jsonl --llm-log logs/ls-calls.jsonl
+
+# レポートを生成（最初の --run が統制群になる）
+node scripts/analyze_run.js \
+  --run "scripted x scripted=logs/ss" \
+  --run "llm x scripted=logs/ls" \
+  --out logs/report.html
+```
+
+勝率は必ずWilson信頼区間と一緒に出し、統制群との差は**対応あり**のMcNemar厳密検定に掛ける
+（同じエピソード番号なら侵入艇の接近角も同じなので、アーム間には対応がある）。
+両陣営の指揮官を同時に替えたアームでは、差が有意でも一方の寄与に帰属できない旨を明示する。
+勝率のほかに、エピソードごとの結末グリッド・エピソード長の分布・推論の応答時間分布・
+采配の質（`intercept`/`move_to`/`patrol`の内訳、見えているtrackから遠い`move_to`の割合、
+前回と同一の点を再発行した割合）・エピソード単位の航跡と`intent`の対応を出す。
 
 **実測値（Node v24.15.0、AMD Ryzen 7 5700X、1コアで実行）**:
 
