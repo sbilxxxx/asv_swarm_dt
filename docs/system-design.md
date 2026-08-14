@@ -101,3 +101,9 @@ asv_swarm_dt/
 ```
 
 各層内部のファイル粒度は、本ドキュメントの合意後に別途詰める。
+
+## 時間モデル
+
+推論を含む意思決定（指揮官、将来の艇LLM/VLM）は、シム時間上で瞬時には扱わない。
+3つの時間軸（シム時間・実時間・表示時間）と意思決定のライフサイクル（t_issue → t_apply）の
+詳細設計は [`time-model.md`](time-model.md) を参照。実装は `core/sim/command/decision_scheduler.js`。

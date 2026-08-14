@@ -64,11 +64,19 @@ export function applyOrders(world, faction, orders) {
 /**
  * エピソード開始時の既定指示。指揮官の最初の指示が発効する（t = latencyS）までの間、
  * 艇が無指示で漂わないようにする。防御=アセット哨戒、侵入=アセットへ直行。
+ *
+ * faction を渡すとその陣営だけへ適用する。用途は指示の不成立（miss）時の onMiss:'default-order'
+ * （docs/time-model.md §12.5「通信途絶を模した既定指示への切替」）で、不成立は指揮官1体＝1陣営に起きる。
+ * ここで両陣営へ適用すると相手陣営の采配まで黙って巻き戻り、片側の通信途絶を測っている
+ * つもりの実験が別物になる。
+ * @param {import('../world.js').World} world
+ * @param {{faction?: string|null}} [options] - 省略時は全艇（エピソード開始時の用途）
  */
-export function applyDefaultOrders(world) {
+export function applyDefaultOrders(world, { faction = null } = {}) {
   const asset = assetOf(world);
   const state = world.state;
   for (let i = 0; i < state.count; i++) {
+    if (faction !== null && state.faction[i] !== faction) continue;
     const id = state.id[i];
     if (state.faction[i] === 'defender') {
       world.orders.set(id, {
@@ -83,15 +91,32 @@ export function applyDefaultOrders(world) {
   }
 }
 
-/** 統合図・ログ表示用の1行要約 */
-export function describeOrder(order) {
+/**
+ * 統合図・ログ表示用の1行要約。
+ *
+ * 座標をどちらの基準で書くかは呼び出し側が決める:
+ *   - asset を渡す → その点を原点とした east/north (m)。指揮官へ見せる統合図はこちら
+ *   - 省略 → ワールド座標。ログ・デバッグ表示はこちら
+ * 統合図の艇位置はアセット基準なので、そこへワールド座標の指示要約を混ぜると
+ * 「艇は (0, 0)・その哨戒中心は (100, 200)」のように1行へ二つの座標系が並ぶ。
+ * 指揮官に渡す側は必ず asset を渡すこと（fused_picture.js 参照）。
+ *
+ * @param {object|undefined} order - World.orders に格納された指示
+ * @param {{x:number, y:number}} [asset] - 指定時はこの点からの east/north で書く
+ * @returns {string}
+ */
+export function describeOrder(order, asset = null) {
   if (!order) return 'none';
   if (order.action === 'intercept') return `intercept ${order.target}`;
+  const originX = asset ? asset.x : 0;
+  const originY = asset ? asset.y : 0;
   if (order.action === 'move_to') {
-    return `move_to (${Math.round(order.waypointWorld.x)}, ${Math.round(order.waypointWorld.y)})`;
+    const p = order.waypointWorld;
+    return `move_to (${Math.round(p.x - originX)}, ${Math.round(p.y - originY)})`;
   }
   if (order.action === 'patrol') {
-    return `patrol (${Math.round(order.centerWorld.x)}, ${Math.round(order.centerWorld.y)}) r=${order.radiusM}`;
+    const c = order.centerWorld;
+    return `patrol (${Math.round(c.x - originX)}, ${Math.round(c.y - originY)}) r=${order.radiusM}`;
   }
   return order.action;
 }
