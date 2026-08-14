@@ -541,7 +541,7 @@ ${seriesVarsDark}
 </style>
 
 <div class="wrap">
-<h1>L0 実験レポート</h1>
+<h1>${esc(meta.title || 'L0 実験レポート')}</h1>
 <p class="lede">${esc(meta.subtitle)}</p>
 <p class="muted">生成: <code>node scripts/analyze_run.js</code> ／ アーム ${runs.length} 本 ／ ${esc(meta.generatedAt)}</p>
 
@@ -880,6 +880,7 @@ function parseArgs(argv) {
   const runs = [];
   let out = 'logs/report.html';
   let subtitle = '';
+  let title = '';
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--run') {
@@ -891,13 +892,15 @@ function parseArgs(argv) {
       out = argv[++i];
     } else if (a === '--subtitle') {
       subtitle = argv[++i];
+    } else if (a === '--title') {
+      title = argv[++i];
     } else if (a === '--help' || a === '-h') {
       return null;
     } else {
       throw new Error(`知らない引数: ${a}`);
     }
   }
-  return { runs, out, subtitle };
+  return { runs, out, subtitle, title };
 }
 
 function usage() {
@@ -909,6 +912,7 @@ node scripts/analyze_run.js --run "表示名=プレフィックス" [--run ...] 
                       最初の --run が統制群として扱われ、以降は対応ありで比較される。
   --out PATH          出力する HTML（既定 logs/report.html）。単一ファイルで完結する。
   --subtitle TEXT     レポート冒頭の説明文。
+  --title TEXT        レポートの見出し（既定 "L0 実験レポート"）。
   --help              この一覧。
 
 例:
@@ -949,6 +953,7 @@ function main() {
   const comparisons = runs.slice(1).map((r) => compare(runs[0], r));
 
   const html = renderHtml(runs, comparisons, {
+    title: args.title,
     subtitle: args.subtitle || `${runs.length} 本のアームを比較`,
     generatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC',
   });
