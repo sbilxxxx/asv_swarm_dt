@@ -21,13 +21,13 @@
 
 このプロジェクトが計算資源を必要とする理由と、現時点で実証済みの内容。
 
-1. **多数体・多エピソードをheadlessで高速に回せる（実証済み）** — `core/`はDOM非依存の純粋なESModulesで、ブラウザなしにNode上で無改造実行できる。同梱の[`scripts/headless_run.js`](scripts/headless_run.js)で誰でも1コマンドで再現・実測できる（詳細は下記「ヘッドレス実行」）。CPU 1コアの実測で3隻 約40,600 steps/s・30隻 約1,900 steps/sを確認済み — GPU上での大規模並列実行（多数体×多環境×多エピソード）に自然に拡張できる設計。
+1. **多数体・多エピソードをheadlessで高速に回せる（実証済み）** — `core/`はDOM非依存の純粋なESModulesで、ブラウザなしにNode上で無改造実行できる。同梱の[`scripts/headless_run.js`](scripts/headless_run.js)で誰でも1コマンドで再現・実測できる（詳細は下記「ヘッドレス実行」）。CPU 1コアの実測で3隻 約108,600 steps/s・30隻 約6,400 steps/sを確認済み — GPU上での大規模並列実行（多数体×多環境×多エピソード）に自然に拡張できる設計。
 2. **攻防エピソードが実際に終了条件・報酬を持つ（実証済み）** — 「互いに追いかけ回すだけ」ではなく、防護対象への侵入・防御側の迎撃・時間切れの3種の終了条件と、防御側視点の報酬（`core/sim/mission.js`）を持つ。`env.reset()`でエピソードを繰り返し実行でき、反復対戦・自己対戦・強化学習ループの土台になる。
 3. **学習データ互換のログを標準搭載（実証済み）** — `step()`の入出力をper-agentフラットJSON Lines形式でロギング（[`core/log/episode_logger.js`](core/log/episode_logger.js)）。UIからのダウンロード導線もあり、模倣学習・強化学習の学習データとしてそのまま使える形式で吐き出せる。
-4. **LLM/VLM/VLA意思決定への差し込み口を用意（配線済み・実装は今後）** — エージェントの意思決定関数（`decideFn`）を差し替えるだけでルールベースから実LLM/VLM/VLAへ切り替えられる（[`core/sim/agents/llm_agent.js`](core/sim/agents/llm_agent.js)）。カメラセンサーの実装・注入設計も機能済み（`digital-twin/camera_sensor.js`）。**現時点でLLM/VLM/VLAの推論コードは未実装** — GPUはこの推論（特にVLM/VLAによる画像・状況入力からの意思決定）を多数体・多エピソードで並列に回す用途に使う計画。
+4. **実LLM推論が指揮官レベルで動いている（実証済み・ただし指揮官まで）** — 統合図の生成→プロンプト→OpenAI互換HTTP→JSON指示のパース→艇への追従制御まで一気通貫で実装済み（`core/sim/command/`、[`docs/l0-experiment-log.md`](docs/l0-experiment-log.md)）。ローカルOllama（`qwen2.5:7b`）に対し150エピソード・1,554回の実推論を連続実行し、パース失敗1件・通信失敗0件を実測。推論の遅延はシム時間上の設定値`latencyS`としてモデル化されているため、統制群（ルールベース指揮官）と**同じ遅延の床**で比較できる（[`docs/time-model.md`](docs/time-model.md)）。カメラセンサーの実装・注入設計も機能済み（`digital-twin/camera_sensor.js`）。**未実装は艇レベルLLM（Phase 2、ハッカソンの主題本体）とVLM/VLA（L1）** — GPUはここを多数体・多エピソードで並列に回す用途に使う計画。
 5. **視覚的な密度を上げる余地が大きい（GPU上の描画余地）** — 3Dシーンの総頂点数は約34,000（詳細は[`docs/3d-quality-plan.md`](docs/3d-quality-plan.md)）。現代GPUの処理能力に対して極めて小さく、隻数・地物密度・描画品質を伸ばす余地は計算資源側ではなく実装側にある。
 
-**正直な現状**: 上記1〜3は実測・実装済みだが、4（実LLM/VLM/VLA推論）はまだコードがない。GPU申請はこの「推論を実際に回す」段階に進むためのもの。現状の制約・未実装項目は[`docs/review-findings-2026-08-07.md`](docs/review-findings-2026-08-07.md)に独立レビューの実測根拠つきで一覧化している（誇張のない自己評価として、判断材料になれば）。
+**正直な現状**: 上記1〜4は実測・実装済み。ただし4は**指揮官2体まで**で、主題である艇レベルLLM（Phase 2）とVLM（L1）はまだコードがない。そして手元のRTX 3060では、艇6隻を`TIME_SCALE=3`で回すのに必要なスループット（6.6判断/秒）に**3.4倍足りない**ことが実測で分かっている（[`docs/llm-probe-measurements-2026-08-13.md`](docs/llm-probe-measurements-2026-08-13.md) §5）。GPU申請はこの「主題を実際に回す」段階に進むためのもの。もう一点正直に書いておくと、**指揮官をLLMにしても統制群に対する勝率の改善は統計的に確認できていない**（25エピソード/アームでは同条件反復の揺らぎに埋もれる。[`docs/l0-experiment-log.md`](docs/l0-experiment-log.md) §6）。現状の制約・未実装項目は[`docs/review-findings-2026-08-07.md`](docs/review-findings-2026-08-07.md)に独立レビューの実測根拠つきで一覧化している（誇張のない自己評価として、判断材料になれば）。
 
 ## 構成
 
@@ -36,15 +36,16 @@
 | [`core/`](core/) | データ取り込み・シーン表現・シミュレーション・意思決定・学習データ互換ログを担う共有ロジック（DOM非依存、Node/ブラウザ両対応） |
 | [`digital-twin/`](digital-twin/) | 3D海域DT（センサー実証: カメラ・レーダー・GNSS、Three.js） |
 | [`swarm-sim/`](swarm-sim/) | 2Dバードビューの戦術マップ・マルチASVスウォーム攻防（Canvas 2D） |
-| [`scripts/`](scripts/) | ヘッドレス実行ランナー |
-| [`docs/`](docs/) | 設計書・独立レビュー記録・品質向上計画 |
+| [`scripts/`](scripts/) | ヘッドレス実行ランナー（[`headless_run.js`](scripts/headless_run.js)）・推論サーバの単体計測ツール（[`llm_probe.js`](scripts/llm_probe.js)） |
+| [`docs/`](docs/) | 設計書・時間モデル・実験ログ・独立レビュー記録・品質向上計画 |
 
 ```mermaid
 flowchart TB
   subgraph Core["core/ （共有ロジック・データ、DOM非依存）"]
     WS["World State<br/>地物 + 機体（SoA）"]
     SIM["Simulation Loop<br/>env_api.step() / mission.js"]
-    AGT["Agent Decision<br/>LLM / VLM / VLA差し込み口"]
+    CMD["Command Layer<br/>統合図 → 指揮官（scripted / LLM）<br/>→ orders → 追従制御<br/>発効は t_issue + latencyS"]
+    AGT["Agent Decision<br/>艇レベルLLM / VLM / VLA差し込み口<br/>（Phase 2・L1）"]
     SENS["Sensor Interface<br/>GNSS・Radar = 実装済み<br/>Camera = IFのみ"]
     LOG["Episode Logger<br/>JSONL"]
   end
@@ -64,8 +65,9 @@ flowchart TB
   WS --読み取り--> HR
   R3D --> CAM
   CAM -. "L1で接続" .-> SENS
-  AGT --> SIM --> WS
-  SENS --> AGT
+  CMD --> SIM --> WS
+  AGT -. "Phase 2で接続" .-> CMD
+  SENS --> CMD
   SIM --> LOG
 ```
 
@@ -81,16 +83,16 @@ node tests/core_smoke.test.js && node tests/command.test.js
 node scripts/headless_run.js --episodes 5
 ```
 
-ルートに`package.json`は無く、`core/`・`tests/`・`scripts/`はNode v22だけで動く（npm依存ゼロ）。上のコマンドはcloneした直後にそのまま通る。
+ルートに`package.json`は無く、`core/`・`tests/`・`scripts/`はNodeだけで動く（npm依存ゼロ）。上のコマンドはcloneした直後にそのまま通る。
 
 **別途用意が必要なもの**:
 
 | | 何のために | 備考 |
 |---|---|---|
-| Node v22 | core・テスト・headless実行 | これだけあればシミュレータ本体は動く |
+| Node v22以降（実測は v24.15.0） | core・テスト・headless実行 | これだけあればシミュレータ本体は動く（指揮官はルールベース） |
 | 静的サーバー（`npx serve .` / `python -m http.server`） | ブラウザ側（`digital-twin/`・`swarm-sim/`） | `file://`直開きは`fetch()`のCORSで動かない |
 | インターネット接続 | `digital-twin/`のThree.js（importmap経由でunpkgから取得） | `swarm-sim/`は外部依存なしで動く |
-| Ollama本体＋モデル（`ollama pull`） | LLM指揮官（`--blue llm`等）。リポジトリには含まれない | ブラウザから使う場合は`OLLAMA_ORIGINS=*`。**推論サーバは別ホストでよい**（下記） |
+| Ollama本体＋モデル（`ollama pull qwen2.5:7b`） | LLM指揮官（`--blue llm`等）。リポジトリには含まれない | ブラウザから使う場合は`OLLAMA_ORIGINS=*`。指揮官2体の直列化を避けるため`OLLAMA_NUM_PARALLEL=4`を推奨。**推論サーバは別ホストでよい**（下記） |
 | `.devtools/`で`npm install` | スクリーンショット駆動QA（puppeteer） | `node_modules/`はgitignore対象。見た目の変更をしないなら不要 |
 | Claude Code の superpowers プラグイン | [`docs/l0-llm-agent-plan.md`](docs/l0-llm-agent-plan.md)が指定する実装ワークフロー | 設計・計画の文脈自体は[`CLAUDE.md`](CLAUDE.md)を起点にリポジトリ内で完結する |
 
@@ -122,39 +124,106 @@ python -m http.server 8000
 その主張を実証するためのランナーを同梱している（[`scripts/headless_run.js`](scripts/headless_run.js)、npm依存なし）。
 
 ```bash
-# 既定シナリオ（3隻: 防御2・侵入1）で5エピソード
+# 既定シナリオ（3隻: 防御2・侵入1）で5エピソード。指揮官は両陣営ともルールベース（推論サーバ不要）
 node scripts/headless_run.js --episodes 5
 
 # 隻数を30隻まで増やして5エピソード（シナリオのspawnを起点に決定論的に合成）
 node scripts/headless_run.js --episodes 5 --boats 30
 
+# 陣営ごとに指揮官の腕を選ぶ（既定は両方 scripted）
+node scripts/headless_run.js --blue scripted --red scripted --boats 3 --episodes 25 --quiet
+
 # ログをJSON Linesとしてファイルへ書き出す（core自体はfs非依存のまま、書き出しはこのスクリプト側の責務）
 node scripts/headless_run.js --episodes 5 --out episodes.jsonl --quiet
+
+# 全オプション
+node scripts/headless_run.js --help
 ```
 
 エピソードごとに`outcome`（defended/breached/timeout）・シム時間・壁時計時間を表示し、
 最後に総step数・総壁時計時間・**steps/s**（1隻あたりのsteps/sも）を出力する。
-意思決定は`swarm-sim/main.js`と同じ間引き間隔（物理6stepに1回、`DECISION_INTERVAL_STEPS=6`）で行う。
+併せて**指揮官の判断サイクルの検証行**（発行数・発効数・`t_issue + latencyS`に厳密一致した件数・最大ずれ）も出力する。
+艇の追従制御（`core/sim/command/boat_controller.js`）は毎ステップ・瞬時で、
+遅延を持つのは指揮官の判断だけである（[`docs/time-model.md`](docs/time-model.md) §6）。
 
-**実測値（Windowsノートで実測、Node v22.17.0、Intel Core i5-1145G7 @ 2.60GHz、1コアで実行）**:
+**実測値（Node v24.15.0、AMD Ryzen 7 5700X、1コアで実行）**:
 
 | 隻数 | 条件 | steps/s |
 |---|---|---|
-| 3隻（シナリオ既定） | `--episodes 5` | 約40,600 steps/s |
-| 30隻（合成spawn） | `--episodes 5 --boats 30` | 約1,900 steps/s |
+| 3隻（シナリオ既定） | `--episodes 50` | 約108,600 steps/s（1隻あたり約36,200） |
+| 30隻（合成spawn） | `--episodes 20 --boats 30` | 約6,400 steps/s（1隻あたり約214） |
 
-30隻側は移動のみのストレステストより低めに出るが、これは本ランナーが素の移動ループではなく、レーダーO(n²)・ミッション判定（`evaluateMission()`）・ルールベース意思決定（`decide()`、6stepに1回）を含む実際のエピソードを最後まで走らせているため。いずれも「GPUで並列に多数体・多エピソードを回せる」という主張を、外部スクリプト無しでこのリポジトリだけで再現・検証できることを実測で示す。
+*（参考: 旧計測機 Intel Core i5-1145G7・Node v22.17.0 では 3隻 約40,600 / 30隻 約1,900 steps/s だった。指揮官階層の導入後もスループットは落ちていない。）*
 
-## 実LLM/VLM/VLAへの差し替え
+30隻側は移動のみのストレステストより低めに出るが、これは本ランナーが素の移動ループではなく、レーダーO(n²)・ミッション判定（`evaluateMission()`）・統合図の生成・指揮官の判断・追従制御を含む実際のエピソードを最後まで走らせているため。いずれも「GPUで並列に多数体・多エピソードを回せる」という主張を、外部スクリプト無しでこのリポジトリだけで再現・検証できることを実測で示す。
 
-デフォルトはAPIキー不要のルールベース関数（`core/sim/agents/rule_based_fallback.js`）。実際のLLM呼び出しに差し替える場合は、`LlmAgent`の`decideFn`にOllama等のHTTP APIを呼ぶ関数を渡す（ブラウザから直接クラウドAPIキーを扱わないための設計判断。詳細は[`docs/system-design.md`](docs/system-design.md)参照）。GPU上でVLM/VLAを稼働させる場合も同じ差し込み口を使う想定。
+統制群（`scripted`同士）は**完全に決定論**で、同じ引数なら何度実行しても結果はバイト単位で一致する（3隻50エピソードで確認済み）。
+
+## 指揮官LLM（実装済み）
+
+陣営ごとに1体の指揮官が、自陣営の統合図（自軍の真値＋レーダー融合した敵トラックと鮮度）を見て、
+艇への指示（`intercept` / `move_to` / `patrol`）をJSONで返す。艇はその指示に従って動く（`core/sim/command/`）。
+
+**推論を行うのは指揮官だけで、艇の追従制御は瞬時**である。艇レベルのLLMはPhase 2の対象。
+
+### セットアップ
+
+```bash
+ollama pull qwen2.5:7b
+# 指揮官2体の並行発行を直列化させないため、サーバは並列度4で起動することを推奨
+#   OLLAMA_NUM_PARALLEL=4 ollama serve
+```
+
+### ヘッドレスから
+
+```bash
+# 防御側だけLLM、侵入側はルールベース（統制群との比較の基本形）
+mkdir -p logs   # 出力先ディレクトリは自分で作る。logs/ は .gitignore 対象
+node scripts/headless_run.js --blue llm --red scripted --model qwen2.5:7b --boats 3 --episodes 25 \
+  --llm-log logs/calls.jsonl --decision-log logs/decisions.jsonl
+
+# 両陣営LLM
+node scripts/headless_run.js --blue llm --red llm --model qwen2.5:7b --episodes 5
+```
+
+推論サーバは**別ホストでよい**（`--llm-url`。既定 `http://localhost:11434/v1`、OpenAI互換なのでvLLM等も可）。
+`--llm-log`には全プロンプト・生応答・パース結果・呼び出しごとの実測レイテンシが残る。
+
+### ブラウザから（`swarm-sim/`）
+
+```text
+http://localhost:8000/swarm-sim/?blue=llm&model=qwen2.5:7b
+```
+
+| クエリパラメータ | 意味 |
+|---|---|
+| `blue` / `red` | 指揮官の腕（`scripted`（既定）/ `llm`） |
+| `model` | モデル名（`llm`のとき必須） |
+| `llm` | OpenAI互換のベースURL（既定 `http://localhost:11434/v1`） |
+| `interval` / `latency` | 発行間隔`intervalS`（既定10）／発効遅延`latencyS`（既定3）、シム秒 |
+| `deadline` / `onmiss` | 締切（既定`inf`）／不成立時の挙動（`keep-current`（既定）/ `default-order`） |
+| `temp` / `maxtokens` | 生成温度（既定0.7）／応答上限トークン（既定300） |
+
+**パラメータ無しの既定動作は推論サーバ不要**（両陣営ルールベース）。ブラウザから使う場合は`OLLAMA_ORIGINS`の設定が要ることがある。
+`latencyS`分の実時間（`latencyS / TIME_SCALE`秒）より推論が遅いと、シムを止めて「推論待ち」オーバーレイを表示する（[`docs/time-model.md`](docs/time-model.md) §9）。
+
+### VLM/VLAへ
+
+同じ差し込み口を使う。`latencyS`はステージの宣言合成（`[render] → [infer]`）へ拡張する設計になっており、
+L1ではrenderステージを直列に足すだけで済む（[`docs/time-model.md`](docs/time-model.md) §12.5）。
+艇レベルの意思決定関数（`decideFn`、[`core/sim/agents/llm_agent.js`](core/sim/agents/llm_agent.js)）の
+デフォルトはAPIキー不要のルールベース関数のまま（ブラウザから直接クラウドAPIキーを扱わないための設計判断）。
 
 ## 現在の実装状況
 
 - `core/`: データ取り込み（手書き海岸線1種、アダプターレジストリ配線済み）・シーン表現・ASV運動学（環境力の差し込み口`environment.sample()`配線済み）・GNSS/レーダー・攻防ミッション判定（`mission.js`）・ルールベースの意思決定（APIキー不要）・学習データ互換のper-agent JSONLログを実装
+- `core/sim/command/`: **指揮官階層**（陣営別の統合図`fused_picture.js`・プロンプト生成`commander_prompt.js`・出力パース`parse_orders.js`・LLM指揮官`llm_commander.js`・ルールベース指揮官`scripted_commanders.js`）と、**時間フレームワーク**（`decision_scheduler.js`: `t_issue → t_apply`・発行トークン・締切`deadlineS`・不成立`onMiss`）、**orders と艇の追従制御**（`orders.js` / `boat_controller.js`）を実装。HTTP経路は`core/sim/agents/llm_http.js`（OpenAI互換）
 - `digital-twin/`: Three.jsで海域3Dシーンを構築（多断面船体・環境マップ・ヒーロー艇追従影・海面LOD）、船体視点のカメラ画像・レーダー・GNSSをHUDに表示
-- `swarm-sim/`: Canvas 2Dで海岸線・ASVアイコン・航跡・防護対象を描画し、固定タイムステップで攻防エピソード（迎撃・突破・時間切れ→自動リセット）を自律ループで実行
+- `swarm-sim/`: Canvas 2Dで海岸線・ASVアイコン・航跡・防護対象・**指示のオーバーレイ**を描画し、スケジューラ駆動で攻防エピソード（迎撃・突破・時間切れ→自動リセット）を自律ループで実行。LLM指揮官の**推論待ち停止**と**不成立**を画面とログに表示する
+- `scripts/`: ヘッドレス実行ランナー（3アーム比較・判断サイクルの検証行つき）・推論サーバの単体計測ツール（`llm_probe.js`）
 
-未実装（インターフェースのみ予約、詳細は[`docs/system-design.md`](docs/system-design.md)）: 実LLM/VLM/VLA推論コード、AUV（2D専用のEntityState/センサーを3D対応させる必要あり）、AIS/ドローン観測アダプターの取込経路、他海域データアダプター、OpenUSD対応、波のサロゲートモデル、学習パイプライン本体、DTとswarm-simのランタイム接続（L1で実施）。
+実測: [`docs/l0-experiment-log.md`](docs/l0-experiment-log.md)（指揮官アームの比較）・[`docs/llm-probe-measurements-2026-08-13.md`](docs/llm-probe-measurements-2026-08-13.md)（推論サーバの性能と`latencyS`の根拠）。
+
+未実装（インターフェースのみ予約、詳細は[`docs/system-design.md`](docs/system-design.md)）: **艇レベルLLM（Phase 2）**、**VLM/VLA推論（L1）**、AUV（2D専用のEntityState/センサーを3D対応させる必要あり）、AIS/ドローン観測アダプターの取込経路、他海域データアダプター、OpenUSD対応、波のサロゲートモデル、学習パイプライン本体、DTとswarm-simのランタイム接続（L1で実施）。
 
 独立レビューによる実測根拠つきの詳細な現状評価は[`docs/review-findings-2026-08-07.md`](docs/review-findings-2026-08-07.md)、3D表現の品質向上計画は[`docs/3d-quality-plan.md`](docs/3d-quality-plan.md)を参照。
