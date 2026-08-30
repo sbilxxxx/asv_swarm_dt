@@ -77,6 +77,7 @@ export function createLlmCommanderFn(options) {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     fetchImpl = undefined, // 既定は llm_http 側（globalThis.fetch を包んだもの）に任せる
     onCall = null,
+    jsonMode = true, // agent-io-design.md §4 の⑤（JSON強制）。既定でオン
   } = options ?? {};
   if (!faction) throw new Error('createLlmCommanderFn: faction is required');
   if (!baseUrl) throw new Error('createLlmCommanderFn: baseUrl is required');
@@ -125,6 +126,7 @@ export function createLlmCommanderFn(options) {
         fetchImpl,
         systemPrompt,
         userPrompt,
+        jsonMode,
       });
       raw = res.text;
       if (res.outputTokens != null) stats.totalOutputTokens += res.outputTokens;

@@ -30,7 +30,7 @@ L0 の実験結果で押さえておくべき点が2つある。**(1) 指揮官�
 |---|---|
 | 本選期間 | 2026-08-15 〜 08-30（16日間） |
 | 体制 | ソロ |
-| 計算資源 | 手元 RTX 3060 12GB（8B級4bit・Ollama）。GPU クラスタ（Qwen3-VL-30B-A3B / 168GB）は申請結果待ち |
+| 計算資源 | **RTX A5000 × 8基（各24GB / 計192GB）・64コア・376GB RAM・Ollama 0.33.2**（2026-08-30 実測）。当初記載の「手元 RTX 3060 12GB ＋ GPUクラスタ申請待ち」は実環境と乖離していたため更新。32B級を8基へ分散ロードして4並列推論まで確認済み（[`submission/measurements/multi-llm-32b-2026-08-30.md`](../submission/measurements/multi-llm-32b-2026-08-30.md)） |
 | ハッカソン主題 | マルチエージェント。**艇レベル LLM は「あれば良い」ではなく主題そのもの** |
 
 主題がマルチエージェントである以上、L0（指揮官2体）で止めた状態は提出物として弱い。Phase 2 までを本選期間内の必達ラインとする。
@@ -116,4 +116,3 @@ L3（自己対戦ログによる戦術学習）は構想のまま置く。本選
 | L0 完了時 | `review-findings-2026-08-07.md` の B-7 を対応済へ、`README.md` の実装状況、`l0-experiment-log.md` を実測で作成、`system-design.md` に時間モデルへの導線 |
 | Phase 2 着手時 | `phase2-boat-llm-plan.md` を新規作成、`time-model.md` §12.5 段階適用表に採用した `deadlineS`/`onMiss` の値を記入 |
 | L1 着手時 | `time-model.md` §7 に renderS/inferS の実測値 |
-| 随時 | PJ 側コピー（`AI_workspace/04_reports/R8/system-dev/`）の同期 |

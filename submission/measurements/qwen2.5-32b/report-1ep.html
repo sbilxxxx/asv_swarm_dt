@@ -1,0 +1,497 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マルチLLM 32b 動作確認</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f5f4f1;
+    --surface-1: #fcfcfb;
+    --surface-2: #eceae5;
+    --border: #d9d7d0;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #78766f;
+    --defended: #2a78d6;
+    --breached: #e34948;
+    --timeout: #8a8985;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #131312;
+      --surface-1: #1a1a19;
+      --surface-2: #232322;
+      --border: #383835;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #97968c;
+      --defended: #3987e5;
+      --breached: #e66767;
+      --timeout: #8a8985;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #131312;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border: #383835;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #97968c;
+    --defended: #3987e5;
+    --breached: #e66767;
+    --timeout: #8a8985;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+  }
+
+  body {
+    margin: 0;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font-family: ui-sans-serif, system-ui, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 96px; }
+  h1 { font-size: 27px; letter-spacing: -0.01em; margin: 0 0 6px; }
+  h2 {
+    font-size: 19px; margin: 52px 0 6px; padding-top: 22px;
+    border-top: 1px solid var(--border); letter-spacing: -0.005em;
+  }
+  h3 { font-size: 15px; margin: 26px 0 8px; color: var(--text-secondary); font-weight: 600; }
+  p { margin: 8px 0; color: var(--text-secondary); max-width: 74ch; }
+  .lede { font-size: 16px; color: var(--text-secondary); max-width: 74ch; }
+  .muted { color: var(--text-muted); font-size: 13px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em;
+         background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--series-1); }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px; margin: 18px 0; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 15px 17px; }
+  .tile .label { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 7px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .tile .value { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; margin-top: 4px;
+                 font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 12.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  .verdict { border-left: 3px solid var(--series-1); background: var(--surface-1);
+             border-radius: 0 10px 10px 0; padding: 14px 18px; margin: 18px 0; }
+  .verdict.null-result { border-left-color: var(--timeout); }
+  .verdict strong { color: var(--text-primary); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--text-muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  .scroll { overflow-x: auto; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0 4px; font-size: 12.5px;
+            color: var(--text-secondary); align-items: center; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  .grid-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+  .grid-name { width: 168px; flex: none; font-size: 12.5px; color: var(--text-secondary);
+               text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cells { display: flex; gap: 2px; flex-wrap: wrap; }
+  .cell { width: 22px; height: 22px; border-radius: 4px; cursor: default; }
+
+  svg { display: block; max-width: 100%; overflow: visible; }
+  .axis { stroke: var(--border); stroke-width: 1; }
+  .axis-text { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  .explorer-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 14px 0 16px; }
+  select { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+           border-radius: 7px; padding: 7px 11px; font: inherit; font-size: 13.5px; }
+  label { font-size: 12.5px; color: var(--text-muted); display: flex; gap: 7px; align-items: center; }
+
+  .explorer { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; }
+  @media (max-width: 860px) { .explorer { grid-template-columns: 1fr; } .grid-name { width: 110px; } }
+
+  .timeline { max-height: 470px; overflow-y: auto; }
+  .decision { border-left: 2px solid var(--border); padding: 7px 0 7px 13px; margin-bottom: 3px; }
+  .decision.applied { border-left-color: var(--series-1); }
+  .decision.kept { border-left-color: var(--timeout); }
+  .decision.missed { border-left-color: var(--breached); }
+  .decision .head { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .decision .intent { font-size: 13.5px; color: var(--text-primary); }
+
+  #tip { position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+         background: var(--surface-1); border: 1px solid var(--border); border-radius: 7px;
+         padding: 7px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,.16);
+         font-variant-numeric: tabular-nums; z-index: 50; max-width: 300px; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13.5px; }
+</style>
+
+<div class="wrap">
+<h1>マルチLLM 32b 動作確認</h1>
+<p class="lede">指揮官LLM1体＋艇LLM3体・qwen2.5:32b・RTX A5000×8</p>
+<p class="muted">生成: <code>node scripts/analyze_run.js</code> ／ アーム 1 本 ／ 2026-08-30 14:49 UTC</p>
+
+
+
+<h2>アーム比較</h2>
+<div class="tiles">
+  <div class="tile">
+    <div class="label"><span class="swatch" style="background:var(--series-1)"></span>qwen2.5:32b (multi-LLM, 1ep)</div>
+    <div class="value">100.0%</div>
+    <div class="sub">防衛 1 / 突破 0 （N=1）</div>
+    <div class="sub muted">95% CI [20.7%, 100.0%]</div>
+  </div>
+</div>
+
+<div class="scroll"><table>
+  <thead><tr>
+    <th>アーム</th><th>N</th><th>防衛</th><th>突破</th><th>勝率</th><th>95% CI</th>
+    <th>統制群との差</th><th>McNemar p</th><th>keptOrders</th><th>発効時刻の一致</th>
+  </tr></thead>
+  <tbody>
+    <tr>
+      <td>qwen2.5:32b (multi-LLM, 1ep) <span class="muted">(統制群)</span></td>
+      <td>1</td><td>1</td><td>0</td>
+      <td>100.0%</td>
+      <td class="muted">[20.7%, 100.0%]</td>
+      <td>—</td>
+      <td>—</td>
+      <td>50.0% <span class="muted">(11/22)</span></td>
+      <td>11/11</td>
+    </tr>
+  </tbody>
+</table></div>
+<p class="muted">「発効時刻の一致」は指示が <code>t_issue + latencyS</code> ちょうどに効いた回数。計画の完了条件のひとつ。
+最大ずれ 1.1e-14 秒（dt=0.1s に対する浮動小数の丸め誤差）。</p>
+
+<h2>エピソードごとの結末</h2>
+<p>アームは同じエピソード番号で同じ初期条件を使う（侵入艇の接近角はエピソード番号の純関数）ので、
+縦に並べると<strong>どのエピソードで判断が分かれたか</strong>が直接読める。McNemar 検定はこの縦の不一致だけを数えている。</p>
+<div class="legend">
+  <span><span class="swatch" style="background:var(--defended)"></span>防衛</span>
+  <span><span class="swatch" style="background:var(--breached)"></span>突破</span>
+  <span><span class="swatch" style="background:var(--timeout)"></span>時間切れ</span>
+</div>
+<div class="card">
+  <div class="grid-row">
+    <div class="grid-name">qwen2.5:32b (multi-LLM, 1ep)</div>
+    <div class="cells">
+      <div class="cell" data-tip="ep 1 — defended / 16.9s / 169 steps" style="background:var(--defended)"></div>
+    </div>
+  </div>
+</div>
+
+<h2>エピソード長の分布</h2>
+<p>結末が同じでも中身は違う。短いエピソードは即座に迎撃できた／即座に突破されたことを意味し、
+長いものは膠着を意味する。分布が二峰なら、勝率という1つの数字はその2つの体制を平均して潰している。</p>
+<h3><span class="swatch" style="background:var(--series-1);display:inline-block;margin-right:7px"></span>qwen2.5:32b (multi-LLM, 1ep)</h3>
+<svg viewBox="0 0 720 46" width="720" height="46" role="img"
+     aria-label="qwen2.5:32b (multi-LLM, 1ep) のエピソード長: 中央値 16.9 秒">
+  <line class="axis" x1="8" y1="33" x2="712" y2="33"></line>
+  <rect x="712" y="12" width="2" height="12" rx="4"
+        fill="var(--series-1)" opacity="0.28"></rect>
+  <line x1="712" y1="9" x2="712" y2="27" stroke="var(--series-1)" stroke-width="2"></line>
+  <circle cx="712.0" cy="18" r="3.2" fill="var(--series-1)" opacity="0.62"
+        stroke="var(--surface-1)" stroke-width="2"><title>16.9 秒</title></circle>
+  <text class="axis-text" x="8" y="44">0s</text>
+  <text class="axis-text" x="712.0" y="44" text-anchor="middle">中央値 17s</text>
+  <text class="axis-text" x="712" y="44" text-anchor="end">17s</text>
+</svg>
+
+
+<h2>推論の実測</h2>
+<p><code>latencyS</code> は<strong>設定値</strong>であってこの実測値ではない（時間モデル §5）。ここに出るのは
+「宣言した遅延の中に実測が収まっているか」を確かめるための記録側の数字で、シムの展開には一切影響しない。</p>
+<div class="tiles">
+  <div class="tile">
+    <div class="label"><span class="swatch" style="background:var(--series-1)"></span>qwen2.5:32b (multi-LLM, 1ep)</div>
+    <div class="value">1.86<span style="font-size:16px;font-weight:500"> s</span></div>
+    <div class="sub">p50 ／ p95 4.73s ／ 平均 2.09s</div>
+    <div class="sub muted">19 回 ／ obey 10 · override 7 · ok 2</div>
+  </div>
+</div>
+<h3><span class="swatch" style="background:var(--series-1);display:inline-block;margin-right:7px"></span>qwen2.5:32b (multi-LLM, 1ep) の応答時間分布</h3>
+<svg viewBox="0 0 720 130" width="720" height="130" role="img"
+     aria-label="qwen2.5:32b (multi-LLM, 1ep) の推論応答時間ヒストグラム">
+  <line class="axis" x1="30" y1="108" x2="690" y2="108"></line>
+  <rect x="31.0" y="20.0" width="31.0"
+        height="88.0" rx="3" fill="var(--series-1)"
+        data-tip="1.04–1.30 s: 7 回"></rect>
+  <rect x="64.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="1.30–1.57 s: 0 回"></rect>
+  <rect x="97.0" y="95.4" width="31.0"
+        height="12.6" rx="3" fill="var(--series-1)"
+        data-tip="1.57–1.83 s: 1 回"></rect>
+  <rect x="130.0" y="32.6" width="31.0"
+        height="75.4" rx="3" fill="var(--series-1)"
+        data-tip="1.83–2.09 s: 6 回"></rect>
+  <rect x="163.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="2.09–2.35 s: 0 回"></rect>
+  <rect x="196.0" y="70.3" width="31.0"
+        height="37.7" rx="3" fill="var(--series-1)"
+        data-tip="2.35–2.62 s: 3 回"></rect>
+  <rect x="229.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="2.62–2.88 s: 0 回"></rect>
+  <rect x="262.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="2.88–3.14 s: 0 回"></rect>
+  <rect x="295.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="3.14–3.41 s: 0 回"></rect>
+  <rect x="328.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="3.41–3.67 s: 0 回"></rect>
+  <rect x="361.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="3.67–3.93 s: 0 回"></rect>
+  <rect x="394.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="3.93–4.20 s: 0 回"></rect>
+  <rect x="427.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="4.20–4.46 s: 0 回"></rect>
+  <rect x="460.0" y="95.4" width="31.0"
+        height="12.6" rx="3" fill="var(--series-1)"
+        data-tip="4.46–4.72 s: 1 回"></rect>
+  <rect x="493.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="4.72–4.98 s: 0 回"></rect>
+  <rect x="526.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="4.98–5.25 s: 0 回"></rect>
+  <rect x="559.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="5.25–5.51 s: 0 回"></rect>
+  <rect x="592.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="5.51–5.77 s: 0 回"></rect>
+  <rect x="625.0" y="108.0" width="31.0"
+        height="0.0" rx="3" fill="var(--series-1)"
+        data-tip="5.77–6.04 s: 0 回"></rect>
+  <rect x="658.0" y="95.4" width="31.0"
+        height="12.6" rx="3" fill="var(--series-1)"
+        data-tip="6.04–6.30 s: 1 回"></rect>
+  <text class="axis-text" x="30" y="123">1.04s</text>
+  <text class="axis-text" x="690" y="123" text-anchor="end">6.30s</text>
+  <text class="axis-text" x="24" y="108" text-anchor="end">0</text>
+  <text class="axis-text" x="24" y="26" text-anchor="end">7</text>
+</svg>
+
+<h2>采配の質</h2>
+<p>勝率は結果しか見ない。指示の中身が妥当だったかは別に測る必要がある。
+<code>intercept</code> は track を追い続けるが <code>move_to</code> は固定点なので、
+<strong>見えている track から遠い move_to</strong> と <strong>前回と同じ点の再発行</strong>は、
+指揮官が古い接触位置へ艇を走らせ続けている兆候になる。</p>
+<div class="scroll"><table>
+  <thead><tr>
+    <th>アーム</th><th>intercept</th><th>move_to</th><th>patrol</th>
+    <th>track から 200m 超</th><th>前回と同一の再発行</th>
+  </tr></thead>
+  <tbody>
+    <tr>
+      <td>qwen2.5:32b (multi-LLM, 1ep)</td>
+      <td>15 <span class="muted">(100%)</span></td>
+      <td>0 <span class="muted">(0%)</span></td>
+      <td>0 <span class="muted">(0%)</span></td>
+      <td>—</td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table></div>
+
+
+<h2>エピソードを1本ずつ見る</h2>
+<p>航跡と、その裏で指揮官が何を考えていたか（intent）を並べる。勝敗の理由は集計では見えないので、
+分かれたエピソードをここで開いて確かめる。</p>
+<div class="explorer-controls">
+  <label>アーム <select id="sel-arm"></select></label>
+  <label>エピソード <select id="sel-ep"></select></label>
+  <span class="muted" id="ep-summary"></span>
+</div>
+<div class="explorer">
+  <div class="card"><svg id="map" viewBox="0 0 520 520" width="520" height="520" role="img" aria-label="航跡図"></svg>
+    <div class="legend" style="margin-top:10px">
+      <span><span class="swatch" style="background:var(--defended)"></span>防御艇</span>
+      <span><span class="swatch" style="background:var(--breached)"></span>侵入艇</span>
+      <span><span class="swatch" style="background:var(--text-muted);border-radius:50%"></span>防護対象</span>
+    </div>
+  </div>
+  <div class="card timeline" id="timeline"></div>
+</div>
+
+<h2>データ</h2>
+<details>
+  <summary>アームごとの決定者の内訳を表で見る</summary>
+  <div class="scroll" style="margin-top:12px"><table>
+    <thead><tr><th>アーム</th><th>決定者</th><th>陣営</th><th>発行</th><th>発効</th><th>維持</th><th>不成立</th><th>実測 t_wall 平均</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>qwen2.5:32b (multi-LLM, 1ep)</td><td>blue-commander</td><td>defender</td>
+        <td>2</td><td>2</td><td>0</td><td>0</td>
+        <td>5427.6 ms</td>
+      </tr>
+      <tr>
+        <td>qwen2.5:32b (multi-LLM, 1ep)</td><td>red-commander</td><td>intruder</td>
+        <td>2</td><td>2</td><td>0</td><td>0</td>
+        <td>4.0 ms</td>
+      </tr>
+      <tr>
+        <td>qwen2.5:32b (multi-LLM, 1ep)</td><td>def-runner-1</td><td>defender</td>
+        <td>6</td><td>1</td><td>5</td><td>0</td>
+        <td>1473.1 ms</td>
+      </tr>
+      <tr>
+        <td>qwen2.5:32b (multi-LLM, 1ep)</td><td>def-runner-2</td><td>defender</td>
+        <td>6</td><td>2</td><td>4</td><td>0</td>
+        <td>1633.8 ms</td>
+      </tr>
+      <tr>
+        <td>qwen2.5:32b (multi-LLM, 1ep)</td><td>def-scout</td><td>defender</td>
+        <td>6</td><td>4</td><td>2</td><td>0</td>
+        <td>1701.2 ms</td>
+      </tr>
+    </tbody>
+  </table></div>
+</details>
+<details>
+  <summary>エピソードごとの結末を表で見る</summary>
+  <div class="scroll" style="margin-top:12px"><table>
+    <thead><tr><th>エピソード</th><th>qwen2.5:32b (multi-LLM, 1ep)</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>defended <span class="muted">16.9s</span></td></tr>
+    </tbody>
+  </table></div>
+</details>
+
+<p class="muted" style="margin-top:44px">ログの出所: <code>submission/measurements/qwen2.5-32b/qwen2.5-32b-ep1</code></p>
+</div>
+
+<div id="tip"></div>
+
+<script>
+const DATA = {"runs":[{"label":"qwen2.5:32b (multi-LLM, 1ep)","colorIndex":0,"episodes":[{"episode":1,"outcome":"defended","simTimeS":16.9,"steps":169,"tracks":[{"id":"def-heavy","faction":"defender","pts":[[-150,-451],[-150,-451],[-149,-451],[-147,-451],[-145,-450],[-141,-450],[-137,-449],[-133,-449],[-129,-449],[-125,-448],[-121,-448],[-117,-448],[-113,-447],[-109,-447],[-105,-447],[-101,-447]]},{"id":"def-runner-1","faction":"defender","pts":[[1,-351],[2,-352],[2,-355],[4,-359],[8,-363],[14,-368],[22,-373],[30,-375],[39,-377],[48,-378],[57,-378],[66,-377],[75,-376],[84,-374],[93,-372]]},{"id":"def-runner-2","faction":"defender","pts":[[1,-551],[2,-550],[2,-548],[4,-544],[8,-539],[14,-534],[22,-530],[31,-528],[40,-527],[49,-527],[58,-529],[66,-532],[74,-536],[82,-541],[88,-547],[94,-554]]},{"id":"def-scout","faction":"defender","pts":[[50,-451],[51,-450],[52,-449],[54,-446],[56,-442],[61,-438],[65,-435],[70,-431],[76,-429],[81,-427],[87,-425],[93,-424],[99,-423],[105,-423]]},{"id":"int-heavy","faction":"intruder","pts":[[250,-451],[249,-451],[247,-451],[243,-451],[240,-452],[236,-452],[232,-452],[228,-453],[224,-453],[220,-454],[216,-455],[212,-456],[208,-457],[204,-458]]},{"id":"int-runner-1","faction":"intruder","pts":[[250,-301],[247,-301],[243,-302],[237,-303],[229,-305],[221,-307],[212,-310],[204,-314],[195,-317],[187,-321],[179,-324],[171,-328],[163,-333],[155,-337],[148,-342]]},{"id":"int-runner-2","faction":"intruder","pts":[[250,-602],[247,-601],[243,-601],[237,-600],[229,-599],[220,-599],[211,-598],[202,-597],[193,-597],[184,-597],[175,-598],[166,-599],[157,-599],[148,-600],[139,-601],[130,-603]]},{"id":"int-scout","faction":"intruder","pts":[[350,-451],[348,-451],[345,-451],[340,-451],[334,-452],[329,-452],[323,-453],[317,-453],[311,-454],[305,-455],[299,-456],[293,-457],[287,-459],[281,-460],[275,-461],[270,-463]]}],"decisions":[{"decider":"blue-commander","faction":"defender","tIssueS":0,"tAppliedS":3,"outcome":"applied","orders":4,"intent":"Engage and neutralize all threats before they reach the asset.","wallMs":6302},{"decider":"red-commander","faction":"intruder","tIssueS":0,"tAppliedS":3,"outcome":"applied","orders":4,"intent":"advance on asset (approach offset 13.0 deg)","wallMs":8},{"decider":"def-runner-1","faction":"defender","tIssueS":0,"tAppliedS":1,"outcome":"kept","orders":0,"intent":null,"wallMs":2437},{"decider":"def-runner-2","faction":"defender","tIssueS":0,"tAppliedS":1,"outcome":"kept","orders":0,"intent":null,"wallMs":2436},{"decider":"def-scout","faction":"defender","tIssueS":0,"tAppliedS":1,"outcome":"kept","orders":0,"intent":null,"wallMs":2472},{"decider":"def-runner-1","faction":"defender","tIssueS":3,"tAppliedS":4,"outcome":"kept","orders":0,"intent":null,"wallMs":1266},{"decider":"def-runner-2","faction":"defender","tIssueS":3,"tAppliedS":4,"outcome":"kept","orders":0,"intent":null,"wallMs":1267},{"decider":"def-scout","faction":"defender","tIssueS":3,"tAppliedS":4,"outcome":"applied","orders":1,"intent":"Closest to asset protection","wallMs":2041},{"decider":"def-runner-1","faction":"defender","tIssueS":6,"tAppliedS":7,"outcome":"kept","orders":0,"intent":null,"wallMs":1056},{"decider":"def-runner-2","faction":"defender","tIssueS":6,"tAppliedS":7,"outcome":"applied","orders":1,"intent":"Closer intercept more efficient","wallMs":2090},{"decider":"def-scout","faction":"defender","tIssueS":6,"tAppliedS":7,"outcome":"applied","orders":1,"intent":"closest to asset threat priority","wallMs":2054},{"decider":"def-runner-1","faction":"defender","tIssueS":9,"tAppliedS":10,"outcome":"kept","orders":0,"intent":null,"wallMs":1116},{"decider":"def-runner-2","faction":"defender","tIssueS":9,"tAppliedS":10,"outcome":"kept","orders":0,"intent":null,"wallMs":1116},{"decider":"def-scout","faction":"defender","tIssueS":9,"tAppliedS":10,"outcome":"applied","orders":1,"intent":"closest to asset威胁","wallMs":1858},{"decider":"blue-commander","faction":"defender","tIssueS":10,"tAppliedS":13,"outcome":"applied","orders":4,"intent":"Continue intercepting enemy vessels to protect asset.","wallMs":4554},{"decider":"red-commander","faction":"intruder","tIssueS":10,"tAppliedS":13,"outcome":"applied","orders":4,"intent":"advance on asset (approach offset 13.0 deg)","wallMs":0},{"decider":"def-runner-1","faction":"defender","tIssueS":12,"tAppliedS":13,"outcome":"kept","orders":0,"intent":null,"wallMs":1038},{"decider":"def-runner-2","faction":"defender","tIssueS":12,"tAppliedS":13,"outcome":"kept","orders":0,"intent":null,"wallMs":1039},{"decider":"def-scout","faction":"defender","tIssueS":12,"tAppliedS":13,"outcome":"applied","orders":1,"intent":"closer intercept needed","wallMs":1782},{"decider":"def-runner-1","faction":"defender","tIssueS":15,"tAppliedS":16,"outcome":"applied","orders":0,"intent":"Closer intercept for neutralisation","wallMs":1925},{"decider":"def-runner-2","faction":"defender","tIssueS":15,"tAppliedS":16,"outcome":"applied","orders":1,"intent":"nearest intruder close","wallMs":1855},{"decider":"def-scout","faction":"defender","tIssueS":15,"tAppliedS":16,"outcome":"kept","orders":0,"intent":null,"wallMs":0}]}],"hasLlm":true}]};
+const SERIES_COUNT = 3;
+
+// ---- ツールチップ（data-tip を持つ全要素で共通）
+const tip = document.getElementById('tip');
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip]');
+  if (!el) return;
+  tip.textContent = el.getAttribute('data-tip');
+  tip.style.opacity = '1';
+});
+document.addEventListener('mousemove', (e) => {
+  if (tip.style.opacity !== '1') return;
+  const pad = 14;
+  let x = e.clientX + pad;
+  let y = e.clientY + pad;
+  const r = tip.getBoundingClientRect();
+  if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - pad;
+  if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - pad;
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
+});
+document.addEventListener('mouseout', (e) => {
+  if (e.target.closest('[data-tip]')) tip.style.opacity = '0';
+});
+
+// ---- エピソード探索
+const selArm = document.getElementById('sel-arm');
+const selEp = document.getElementById('sel-ep');
+const epSummary = document.getElementById('ep-summary');
+const mapEl = document.getElementById('map');
+const timelineEl = document.getElementById('timeline');
+
+DATA.runs.forEach((r, i) => {
+  const o = document.createElement('option');
+  o.value = String(i);
+  o.textContent = r.label;
+  selArm.appendChild(o);
+});
+
+function fillEpisodes() {
+  const run = DATA.runs[Number(selArm.value)];
+  selEp.innerHTML = '';
+  run.episodes.forEach((e) => {
+    const o = document.createElement('option');
+    o.value = String(e.episode);
+    o.textContent = 'ep ' + e.episode + ' — ' + (e.outcome || '?');
+    selEp.appendChild(o);
+  });
+}
+
+function draw() {
+  const run = DATA.runs[Number(selArm.value)];
+  const ep = run.episodes.find((e) => String(e.episode) === selEp.value) || run.episodes[0];
+  if (!ep) return;
+
+  epSummary.textContent = ep.outcome + ' ／ ' + ep.simTimeS + ' 秒 ／ ' + ep.steps + ' steps ／ 判断 ' + ep.decisions.length + ' 回';
+
+  // 航跡の座標範囲。防護対象（原点）を必ず含める
+  let minX = 0, maxX = 0, minY = 0, maxY = 0;
+  for (const t of ep.tracks) for (const p of t.pts) {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  const span = Math.max(maxX - minX, maxY - minY, 200) * 1.12;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const S = 520, PAD = 26;
+  const px = (x) => PAD + ((x - cx) / span + 0.5) * (S - 2 * PAD);
+  const py = (y) => S - PAD - ((y - cy) / span + 0.5) * (S - 2 * PAD); // 北を上に
+
+  const parts = [];
+  parts.push('<rect x="0" y="0" width="' + S + '" height="' + S + '" fill="var(--surface-2)" rx="8"/>');
+  // 防護対象と突破圏
+  const r80 = Math.abs(px(80) - px(0));
+  parts.push('<circle cx="' + px(0) + '" cy="' + py(0) + '" r="' + r80 + '" fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="4 4" opacity="0.7"/>');
+  parts.push('<circle cx="' + px(0) + '" cy="' + py(0) + '" r="6" fill="var(--text-muted)"/>');
+
+  for (const t of ep.tracks) {
+    const color = t.faction === 'intruder' ? 'var(--breached)' : 'var(--defended)';
+    const d = t.pts.map((p, i) => (i ? 'L' : 'M') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
+    parts.push('<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" opacity="0.8" stroke-linecap="round" stroke-linejoin="round"/>');
+    const last = t.pts[t.pts.length - 1];
+    const first = t.pts[0];
+    if (first) parts.push('<circle cx="' + px(first[0]).toFixed(1) + '" cy="' + py(first[1]).toFixed(1) + '" r="3" fill="var(--surface-2)" stroke="' + color + '" stroke-width="2"/>');
+    if (last) {
+      parts.push('<circle cx="' + px(last[0]).toFixed(1) + '" cy="' + py(last[1]).toFixed(1) + '" r="5" fill="' + color + '" stroke="var(--surface-2)" stroke-width="2"><title>' + t.id + '</title></circle>');
+      parts.push('<text x="' + (px(last[0]) + 9).toFixed(1) + '" y="' + (py(last[1]) + 4).toFixed(1) + '" class="axis-text" fill="var(--text-secondary)">' + t.id + '</text>');
+    }
+  }
+  parts.push('<text x="' + (S - PAD) + '" y="' + (S - 8) + '" text-anchor="end" class="axis-text">約 ' + Math.round(span) + ' m 四方 ／ 上が北</text>');
+  mapEl.innerHTML = parts.join('');
+
+  if (ep.decisions.length === 0) {
+    timelineEl.innerHTML = '<p class="muted">このアームには判断ログ（--decision-log）がありません。</p>';
+    return;
+  }
+  const rows = ep.decisions.slice().sort((a, b) => a.tIssueS - b.tIssueS).map((d) => {
+    const wall = d.wallMs === null ? '' : ' ／ 実測 ' + (d.wallMs / 1000).toFixed(2) + 's';
+    const applied = d.tAppliedS === null ? '未発効' : '発効 t=' + d.tAppliedS + 's';
+    return '<div class="decision ' + d.outcome + '">' +
+      '<div class="head">t=' + d.tIssueS + 's 発行 → ' + applied + ' ／ ' + d.decider + ' ／ ' + d.outcome + ' ／ ' + d.orders + ' 件' + wall + '</div>' +
+      (d.intent ? '<div class="intent">' + d.intent.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])) + '</div>' : '') +
+      '</div>';
+  });
+  timelineEl.innerHTML = rows.join('');
+}
+
+selArm.addEventListener('change', () => { fillEpisodes(); draw(); });
+selEp.addEventListener('change', draw);
+fillEpisodes();
+draw();
+</script>

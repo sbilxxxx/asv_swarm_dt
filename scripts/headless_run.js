@@ -42,7 +42,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCENARIO_PATH = path.join(__dirname, '../core/scenarios/tokyo_bay_minimal.json');
+const DEFAULT_SCENARIO = 'tokyo_bay_minimal';
+
+/** --scenario は名前（core/scenarios/<name>.json）とパスの両方を受ける */
+function resolveScenarioPath(nameOrPath) {
+  const v = nameOrPath ?? DEFAULT_SCENARIO;
+  if (v.includes('/') || v.endsWith('.json')) return path.resolve(v);
+  return path.join(__dirname, `../core/scenarios/${v}.json`);
+}
 
 /**
  * シム時刻は dt=0.1 の累積で誤差が乗る（t=240 で約 9.4e-12）。時刻の比較は
@@ -53,6 +60,7 @@ const T_EPS = 1e-6;
 const HELP_TEXT = `node scripts/headless_run.js [options]
 
   --episodes N          実行するエピソード数（既定 5）
+  --scenario NAME|path  シナリオ（既定 tokyo_bay_minimal）。名前なら core/scenarios/<NAME>.json を読む
   --boats N             隻数（既定: シナリオ既定の spawn 数=3）。超える分は決定論的に合成する
   --blue scripted|llm   防御側指揮官の腕（既定 scripted）
   --red scripted|llm    侵入側指揮官の腕（既定 scripted）
@@ -65,8 +73,13 @@ const HELP_TEXT = `node scripts/headless_run.js [options]
   --command-latency S   指示の発効遅延 latencyS（既定 3 シム秒。設定値であって実測値ではない）
   --command-deadline S  締切 deadlineS（既定 inf ＝ L0 の全停止モデル。有限値で「不成立」が有効になる）
   --on-miss MODE        不成立時の挙動 keep-current（既定）| default-order
+  --boat-mode scripted|llm  艇レベルの判断（既定 scripted＝追従制御のみ）。llm で
+                        docs/decision-architecture.md §1 の艇（def-runner-1/2, def-scout。
+                        シナリオに無い id は警告して無視）を指揮官と同じスケジューラに register する
+  --boat-interval S     艇の発行間隔（既定 3 シム秒。decision-architecture.md §1）
+  --boat-latency S      艇の指示の発効遅延（既定 1 シム秒）
   --out path            env.logger の JSONL を書き出す
-  --llm-log path        LLM 指揮官の全呼び出し（プロンプト・生応答・失敗）を JSONL で書き出す
+  --llm-log path        LLM 指揮官・艇の全呼び出し（プロンプト・生応答・失敗）を JSONL で書き出す
   --decision-log path   全判断サイクル（発行/発効時刻・ステージ別実測 t_wall）を JSONL で書き出す
   --no-warmup           LLM 腕のウォームアップ呼び出しを省く（既定は実施。実測のコールドスタートは 8.7s）
   --verbose             指示が発効するたびに1行表示する（LLM 腕の采配を追うとき用）
@@ -76,7 +89,10 @@ const HELP_TEXT = `node scripts/headless_run.js [options]
   例（統制群・GPU 不要・完全に決定論）:
     node scripts/headless_run.js --blue scripted --red scripted --boats 6 --episodes 20 --quiet
   例（LLM 指揮官を1エピソード）:
-    node scripts/headless_run.js --blue llm --model qwen2.5:7b --episodes 1 --llm-log probe-commander.jsonl`;
+    node scripts/headless_run.js --blue llm --model qwen2.5:7b --episodes 1 --llm-log probe-commander.jsonl
+  例（マルチLLM: 指揮官＋艇が同じスケジューラで相互に判断）:
+    node scripts/headless_run.js --scenario flag_defence_squadrons --blue llm --boat-mode llm \
+      --model qwen2.5:7b --episodes 1 --llm-log multi-llm.jsonl --verbose`;
 
 /** 締切だけは「無限」を書けるようにする（L0 の既定＝待ち続ける） */
 function parseDeadline(raw) {
@@ -91,6 +107,7 @@ function parseDeadline(raw) {
 function parseArgs(argv) {
   const opts = {
     episodes: 5,
+    scenario: null,
     boats: null,
     out: null,
     quiet: false,
@@ -111,10 +128,14 @@ function parseArgs(argv) {
     warmup: true,
     llmLog: null,
     decisionLog: null,
+    boatMode: 'scripted',
+    boatIntervalS: 3,
+    boatLatencyS: 1,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--episodes') opts.episodes = Number(argv[++i]);
+    else if (arg === '--scenario') opts.scenario = argv[++i];
     else if (arg === '--boats') opts.boats = Number(argv[++i]);
     else if (arg === '--out') opts.out = argv[++i];
     else if (arg === '--quiet') opts.quiet = true;
@@ -133,10 +154,14 @@ function parseArgs(argv) {
     else if (arg === '--no-warmup') opts.warmup = false;
     else if (arg === '--llm-log') opts.llmLog = argv[++i];
     else if (arg === '--decision-log') opts.decisionLog = argv[++i];
+    else if (arg === '--boat-mode') opts.boatMode = argv[++i];
+    else if (arg === '--boat-interval') opts.boatIntervalS = Number(argv[++i]);
+    else if (arg === '--boat-latency') opts.boatLatencyS = Number(argv[++i]);
     else {
       throw new Error(
-        `unknown argument: ${arg} (known: --episodes N, --boats N, --out path, --quiet, --verbose, ` +
-          '--blue scripted|llm, --red scripted|llm, --llm-url URL, --model NAME, --temperature T, ' +
+        `unknown argument: ${arg} (known: --episodes N, --scenario NAME|path, --boats N, --out path, --quiet, --verbose, ` +
+          '--blue scripted|llm, --red scripted|llm, --boat-mode scripted|llm, --boat-interval S, --boat-latency S, ' +
+          '--llm-url URL, --model NAME, --temperature T, ' +
           '--max-tokens N, --command-interval S, --command-latency S, --command-deadline S|inf, ' +
           '--on-miss keep-current|default-order, --no-warmup, --llm-log path, --decision-log path, --help)'
       );
@@ -171,6 +196,18 @@ function parseArgs(argv) {
   }
   if (opts.onMiss !== 'keep-current' && opts.onMiss !== 'default-order') {
     throw new Error(`--on-miss must be "keep-current" or "default-order", got: ${opts.onMiss}`);
+  }
+  if (opts.boatMode !== 'scripted' && opts.boatMode !== 'llm') {
+    throw new Error(`--boat-mode must be "scripted" or "llm", got: ${opts.boatMode}`);
+  }
+  if (opts.boatMode === 'llm' && !opts.model) {
+    throw new Error('--boat-mode llm requires --model (e.g. --model qwen2.5:7b)');
+  }
+  if (!Number.isFinite(opts.boatIntervalS) || opts.boatIntervalS <= 0) {
+    throw new Error(`--boat-interval must be a positive number of seconds, got: ${opts.boatIntervalS}`);
+  }
+  if (!Number.isFinite(opts.boatLatencyS) || opts.boatLatencyS < 0) {
+    throw new Error(`--boat-latency must be a number of seconds >= 0, got: ${opts.boatLatencyS}`);
   }
   return opts;
 }
@@ -438,7 +475,11 @@ async function runEpisode({
           const commander = commanders.get(id);
           const timing = commander.timing ?? {};
           // 観測スナップショットは発行時刻のもの。ここから先、世界が進んでもこの図は更新しない（I3）
-          const picture = buildPicture(world, commander.faction, { episode });
+          // 指揮官は共通の buildPicture（統合図）。艇はそれぞれ自分の視界を持つビルダーを
+          // decider ごとに携える（マルチLLM: commander.buildPicture があればそちらを使う）。
+          const picture = commander.buildPicture
+            ? commander.buildPicture(world, { episode })
+            : buildPicture(world, commander.faction, { episode });
           const token = scheduler.markIssued(id, t);
           const latencyS = declaredLatencyS(timing);
           const cycle = {
@@ -587,8 +628,15 @@ async function main() {
     '../core/sim/command/scripted_commanders.js'
   );
   const { createLlmCommanderFn } = await import('../core/sim/command/llm_commander.js');
+  const { buildBoatPicture, createLlmBoatAgentFn } = await import('../core/sim/agents/boat_agent.js');
 
-  const scenario = JSON.parse(fs.readFileSync(SCENARIO_PATH, 'utf8'));
+  const scenarioPath = resolveScenarioPath(opts.scenario);
+  if (!fs.existsSync(scenarioPath)) {
+    const dir = path.join(__dirname, '../core/scenarios');
+    const known = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''));
+    throw new Error(`scenario not found: ${scenarioPath} (known: ${known.join(', ')})`);
+  }
+  const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
   const scene = await loadSceneFromScenario(scenario); // scene.projectionをspawn合成より先に用意する
 
   const boatsTarget = opts.boats ?? scenario.spawns.length;
@@ -623,12 +671,13 @@ async function main() {
     capacity: spawns.length,
     protectedAsset,
     radarRangeM: scenario.sensors?.radarRangeM,
+    radarPerShipClass: scenario.sensors?.perShipClass === true,
   });
   for (const s of spawns) {
     const { x, y } = scene.projection.latLonToLocal(s.lat, s.lon);
     // v2 では艇はエージェントオブジェクトを持たない。毎ステップの操舵は boat_controller.js が
     // 現在の指示から計算し、指示を出すのは指揮官（下の commanders）だけである。
-    world.spawn({ id: s.id, faction: s.faction, platform: s.platform ?? 'asv', x, y, heading: (s.headingDeg * Math.PI) / 180 });
+    world.spawn({ id: s.id, faction: s.faction, shipClass: s.shipClass, platform: s.platform ?? 'asv', x, y, heading: (s.headingDeg * Math.PI) / 180 });
   }
 
   const env = new EnvApi(world); // dt既定0.1s
@@ -675,10 +724,62 @@ async function main() {
     ['blue-commander', makeCommander(opts.blue, 'defender')],
     ['red-commander', makeCommander(opts.red, 'intruder')],
   ]);
+
+  // --- 艇レベル LLM（マルチLLM）--- docs/decision-architecture.md §1 の艇台帳。
+  // 指揮官と同じ decide()→{orders,intent}|null 契約・同じ world.orders への書き込みなので、
+  // commanders マップへそのまま合流させれば scheduler.register も末尾の統計表示もそのまま乗る
+  // （register() は「艇を足すだけで乗る」設計。§13 / decision-architecture.md §0）。
+  // def-heavy には頭脳を載せない（判断の余地が最小・推論を割かない。同 §1 の設計どおり）。
+  const BOAT_LLM_IDS = ['def-runner-1', 'def-runner-2', 'def-scout'];
+  if (opts.boatMode === 'llm') {
+    const boatTiming = {
+      intervalS: opts.boatIntervalS,
+      latencyS: opts.boatLatencyS,
+      stages: [{ name: 'infer', seconds: opts.boatLatencyS }],
+    };
+    for (const boatId of BOAT_LLM_IDS) {
+      if (world.state.indexOf(boatId) < 0) {
+        console.warn(`--boat-mode llm: scenario "${scenario.name}" has no boat "${boatId}"; skipping`);
+        continue;
+      }
+      const llmDecide = createLlmBoatAgentFn({
+        boatId,
+        faction: 'defender',
+        intervalS: opts.boatIntervalS,
+        latencyS: opts.boatLatencyS,
+        baseUrl: opts.llmUrl,
+        model: opts.model,
+        temperature: opts.temperature,
+        ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+        onCall: opts.llmLog ? (rec) => llmCallRecords.push(rec) : null,
+      });
+      // 相討ちで消えた艇は判断しない＝推論を焚かない。サイクルは kept（指示なし）として
+      // 通常どおり刻まれるので、スケジューラ側の決定論には触れない。
+      const decide = async (picture) => (picture?.dead ? null : llmDecide(picture));
+      decide.stats = llmDecide.stats;
+      commanders.set(boatId, {
+        faction: 'defender',
+        timing: boatTiming,
+        side: 'llm',
+        buildPicture: (w, o) => {
+          const bi = w.state.indexOf(boatId);
+          if (bi < 0 || !w.state.alive[bi]) return { boatId, dead: true };
+          return buildBoatPicture(w, boatId, o);
+        },
+        decide,
+      });
+    }
+    if (![...commanders.keys()].some((id) => BOAT_LLM_IDS.includes(id))) {
+      throw new Error(
+        `--boat-mode llm: scenario "${scenario.name}" has none of ${BOAT_LLM_IDS.join(', ')}; nothing to register`
+      );
+    }
+  }
+
   const scheduler = new DecisionScheduler();
   for (const [id, commander] of commanders) scheduler.register(id, commander.timing);
 
-  if (opts.warmup && (opts.blue === 'llm' || opts.red === 'llm')) {
+  if (opts.warmup && (opts.blue === 'llm' || opts.red === 'llm' || opts.boatMode === 'llm')) {
     const { postChatCompletion } = await import('../core/sim/agents/llm_http.js');
     await warmUpModel(postChatCompletion, {
       baseUrl: opts.llmUrl,
@@ -754,7 +855,9 @@ async function main() {
     `blue=${opts.blue} red=${opts.red}${opts.model ? ` model=${opts.model} temp=${opts.temperature}` : ''} ` +
       `interval=${opts.commandIntervalS}s latency=${opts.commandLatencyS}s ` +
       `deadline=${opts.deadlineS === Infinity ? 'inf' : `${opts.deadlineS}s`} onMiss=${opts.onMiss} ` +
-      `boats=${spawns.length} episodes=${opts.episodes}`
+      `boats=${spawns.length}` +
+      `${opts.boatMode === 'llm' ? ` boatMode=llm×${[...commanders.keys()].filter((id) => BOAT_LLM_IDS.includes(id)).length}(interval=${opts.boatIntervalS}s,latency=${opts.boatLatencyS}s)` : ''} ` +
+      `episodes=${opts.episodes}`
   );
   console.log(
     `outcomes: defended=${tally.defended} breached=${tally.breached} timeout=${tally.timeout} ` +
@@ -812,22 +915,51 @@ async function main() {
     }
     const stats = commander.decide.stats;
     if (!stats) continue; // scripted には stats が無い
-    console.log(
-      `${id}: calls=${stats.calls} ok=${stats.ok} parseFailures=${stats.parseFailures} ` +
-        `transportFailures=${stats.transportFailures} keptOrders=${stats.keptOrders} ` +
-        `droppedOrders=${stats.droppedOrders} onCallErrors=${stats.onCallErrors}`
-    );
-    console.log(
-      `${id}: meanLatency=${(stats.totalLatencyMs / Math.max(stats.calls, 1)).toFixed(0)}ms ` +
-        `meanOutputTokens=${(stats.totalOutputTokens / Math.max(stats.ok, 1)).toFixed(1)} ` +
-        `byOutcome=${JSON.stringify(stats.byOutcome)}`
-    );
-    const keptRate = stats.keptOrders / Math.max(stats.calls, 1);
-    if (keptRate > 0.2) {
+    // 指揮官（llm_commander.js）と艇（boat_agent.js）で stats の形が違う: 指揮官は
+    // ok/droppedOrders、艇は obeys/overrides を持つ。id が BOAT_LLM_IDS にあるかで分岐する
+    // （マルチLLM: 2種類の decider が同じ commanders マップに混在するのはここだけ）。
+    const isBoat = BOAT_LLM_IDS.includes(id);
+    if (isBoat) {
       console.log(
-        `WARNING: ${id} kept current orders on ${(keptRate * 100).toFixed(1)}% of cycles (LLM failures). ` +
-          'This run under-represents LLM command; fix the prompt or the server before using these outcomes.'
+        `${id}: calls=${stats.calls} obeys=${stats.obeys} overrides=${stats.overrides} ` +
+          `parseFailures=${stats.parseFailures} transportFailures=${stats.transportFailures} ` +
+          `keptOrders=${stats.keptOrders} onCallErrors=${stats.onCallErrors}`
       );
+      console.log(
+        `${id}: meanLatency=${(stats.totalLatencyMs / Math.max(stats.calls, 1)).toFixed(0)}ms ` +
+          `meanOutputTokens=${(stats.totalOutputTokens / Math.max(stats.calls, 1)).toFixed(1)} ` +
+          `byOutcome=${JSON.stringify(stats.byOutcome)}`
+      );
+    } else {
+      console.log(
+        `${id}: calls=${stats.calls} ok=${stats.ok} parseFailures=${stats.parseFailures} ` +
+          `transportFailures=${stats.transportFailures} keptOrders=${stats.keptOrders} ` +
+          `droppedOrders=${stats.droppedOrders} onCallErrors=${stats.onCallErrors}`
+      );
+      console.log(
+        `${id}: meanLatency=${(stats.totalLatencyMs / Math.max(stats.calls, 1)).toFixed(0)}ms ` +
+          `meanOutputTokens=${(stats.totalOutputTokens / Math.max(stats.ok, 1)).toFixed(1)} ` +
+          `byOutcome=${JSON.stringify(stats.byOutcome)}`
+      );
+    }
+    if (isBoat) {
+      // 艇は obey が第一級の応答なので keptOrders が高くて正常（agent-io-design.md §1.2）。
+      // ここで警告に値するのは失敗（parse/transport）だけ。
+      const failureRate = (stats.parseFailures + stats.transportFailures) / Math.max(stats.calls, 1);
+      if (failureRate > 0.2) {
+        console.log(
+          `WARNING: ${id} failed (parse/transport) on ${(failureRate * 100).toFixed(1)}% of cycles. ` +
+            'Fix the prompt or the server before using these outcomes.'
+        );
+      }
+    } else {
+      const keptRate = stats.keptOrders / Math.max(stats.calls, 1);
+      if (keptRate > 0.2) {
+        console.log(
+          `WARNING: ${id} kept current orders on ${(keptRate * 100).toFixed(1)}% of cycles (LLM failures). ` +
+            'This run under-represents LLM command; fix the prompt or the server before using these outcomes.'
+        );
+      }
     }
   }
 

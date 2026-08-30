@@ -94,7 +94,10 @@ async function readBodySnippet(res) {
  * OpenAI 互換 `POST {baseUrl}/chat/completions` を1回。
  *
  * @param {{baseUrl:string, model:string, temperature?:number, maxTokens?:number, timeoutMs?:number,
- *   fetchImpl?:typeof fetch, systemPrompt:string, userPrompt:string}} options
+ *   fetchImpl?:typeof fetch, systemPrompt:string, userPrompt:string, jsonMode?:boolean}} options
+ *   jsonMode: true なら OpenAI 互換の `response_format:{type:"json_object"}` を付ける
+ *     （agent-io-design.md §4 の⑤。Ollama/vLLM どちらも対応。プロンプトのスキーマ説明は
+ *     引き続き要る——強制されるのは「構文として妥当な JSON」までで、キー名までは強制しない）。
  * @returns {Promise<{text:string, outputTokens:number|null, finishReason:string|null}>}
  * @throws {LlmHttpError} 通信・応答のあらゆる失敗（kind で分類済み）
  */
@@ -107,6 +110,7 @@ export async function postChatCompletion({
   fetchImpl = defaultFetch,
   systemPrompt,
   userPrompt,
+  jsonMode = false,
 }) {
   // 設定の誤りは失敗モードではなく呼び出し側のバグ。LlmHttpError にせず素直に投げる
   // （kind を付けて返すと「サーバが不調」として集計され、設定ミスが実験結果に化ける）。
@@ -133,6 +137,7 @@ export async function postChatCompletion({
           temperature,
           max_tokens: maxTokens,
           stream: false,
+          ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },

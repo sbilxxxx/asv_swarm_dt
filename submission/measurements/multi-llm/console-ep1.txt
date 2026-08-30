@@ -1,0 +1,59 @@
+warmup: qwen2.5:7b loaded in 0.2s
+  t=1.0 def-runner-1: 1 order(s) 「following commander's order」
+  t=1.0 def-runner-2: 1 order(s) 「Patrol closer to int-heavy」
+  t=1.0 def-scout: 1 order(s) 「close to intruders」
+  t=3.0 blue-commander: 4 order(s) 「Move heavy and runners to enemy last seen, scout intercepts」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset 13.0 deg)」
+  t=4.0 def-runner-1: 1 order(s) 「threat closer」
+  t=4.0 def-runner-2: 1 order(s) 「Close to asset, avoid intruder.」
+  t=4.0 def-scout: 1 order(s) 「closest intruder」
+  t=7.0 def-runner-1: 1 order(s) 「closest threat」
+  t=7.0 def-runner-2: 1 order(s) 「closer to intruder」
+  t=7.0 def-scout: 1 order(s) 「nearest intruder」
+  t=10.0 def-runner-1: 1 order(s) 「closest threat」
+  t=10.0 def-runner-2: 1 order(s) 「close intruder」
+  t=10.0 def-scout: 1 order(s) 「closest intruder」
+  t=13.0 blue-commander: 4 order(s) 「Move heavy to asset, intercept remaining threats.」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset 13.0 deg)」
+  t=13.0 def-runner-1: 1 order(s) 「closest threat」
+  t=13.0 def-runner-2: 1 order(s) 「closest intruder」
+  t=13.0 def-scout: 1 order(s) 「closest intruder」
+  t=16.0 def-runner-1: 1 order(s) 「closest intruder」
+  t=16.0 def-runner-2: kept current orders (no usable decision)
+  t=16.0 def-scout: kept current orders (no usable decision)
+  t=19.0 def-runner-1: 1 order(s) 「closest intruder」
+  t=19.0 def-runner-2: kept current orders (no usable decision)
+  t=19.0 def-scout: kept current orders (no usable decision)
+episode 1/1: outcome=defended simTime=20.5s wallTime=7.826s steps=205 orders=21/27
+---
+blue=llm red=scripted model=qwen2.5:7b temp=0.7 interval=10s latency=3s deadline=inf onMiss=keep-current boats=8 boatMode=llm×3(interval=3s,latency=1s) episodes=1
+outcomes: defended=1 breached=0 timeout=0 (defender win rate 100.0%)
+totalSteps=205 totalWallTime=7.826s steps/s = 26.2 (per boat 3.3)
+commands: issued=27 applied=21 kept=4 missed=0 blocked=0 discarded=0 appliedOrders=33 ignoredOrders=0
+timing: applied exactly at t_issue+3s 21/21, kept released on the same tick 4/4 (max lag 1.4e-14s, dt=0.1s)
+---
+blue-commander (defender, llm): issued=3 applied=2 kept=0 missed=0 in-flight=1 appliedOrders=8 ignoredOrders=0
+blue-commander: measured wall (record only) stage=infer n=3 mean=1342.4ms max=1914.4ms (declared 3s — the declared value is what the sim uses)
+blue-commander: calls=3 ok=3 parseFailures=0 transportFailures=0 keptOrders=0 droppedOrders=0 onCallErrors=0
+blue-commander: meanLatency=1342ms meanOutputTokens=120.0 byOutcome={"ok":3,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+red-commander (intruder, scripted): issued=3 applied=2 kept=0 missed=0 in-flight=1 appliedOrders=8 ignoredOrders=0
+red-commander: measured wall (record only) stage=infer n=3 mean=1.3ms max=3.4ms (declared 3s — the declared value is what the sim uses)
+---
+def-runner-1 (defender, llm): issued=7 applied=7 kept=0 missed=0 in-flight=0 appliedOrders=7 ignoredOrders=0
+def-runner-1: measured wall (record only) stage=infer n=7 mean=595.0ms max=880.5ms (declared 3s — the declared value is what the sim uses)
+def-runner-1: calls=7 obeys=0 overrides=7 parseFailures=0 transportFailures=0 keptOrders=0 onCallErrors=0
+def-runner-1: meanLatency=595ms meanOutputTokens=31.0 byOutcome={"override":7,"obey":0,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+def-runner-2 (defender, llm): issued=7 applied=5 kept=2 missed=0 in-flight=0 appliedOrders=5 ignoredOrders=0
+def-runner-2: measured wall (record only) stage=infer n=7 mean=566.8ms max=959.1ms (declared 3s — the declared value is what the sim uses)
+def-runner-2: calls=5 obeys=0 overrides=5 parseFailures=0 transportFailures=0 keptOrders=0 onCallErrors=0
+def-runner-2: meanLatency=793ms meanOutputTokens=40.8 byOutcome={"override":5,"obey":0,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+def-scout (defender, llm): issued=7 applied=5 kept=2 missed=0 in-flight=0 appliedOrders=5 ignoredOrders=0
+def-scout: measured wall (record only) stage=infer n=7 mean=509.7ms max=899.5ms (declared 3s — the declared value is what the sim uses)
+def-scout: calls=5 obeys=0 overrides=5 parseFailures=0 transportFailures=0 keptOrders=0 onCallErrors=0
+def-scout: meanLatency=714ms meanOutputTokens=32.8 byOutcome={"override":5,"obey":0,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+log written to submission/measurements/multi-llm/positions-ep1.jsonl (1410 rows)
+llm call log written to submission/measurements/multi-llm/llm-log-ep1.jsonl (20 rows)
+decision log written to submission/measurements/multi-llm/decision-log-ep1.jsonl (27 rows)

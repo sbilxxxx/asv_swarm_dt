@@ -3,4 +3,5 @@ node_modules/
 *.log
 .devtools/*.png
 .devtools/gif-frames-*/
+.devtools/tmp/
 logs/

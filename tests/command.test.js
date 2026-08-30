@@ -1563,10 +1563,159 @@ async function testLlmCommanderCountsAnAsyncOnCallFailure() {
   console.log('OK: an async onCall failure is counted and never kills the run');
 }
 
+/**
+ * 爆破半径という「唯一の距離」が持つ三つの意味（docs/game-design.md §2）を、物理を回さずに
+ * 直接 evaluateMission() へ問う。艇を手で置いて1回だけ評価するので、操舵・追従・レーダーの
+ * どれが壊れてもこのテストは動かない——ルールそのものだけを固定する。
+ *
+ * とくに A-1（旗を壊せるのは「重装艇だけ」ではなく「武装艦すべて。届く距離は自分の爆破半径」）は
+ * 数字の入れ替えでは検出できない。旧ルール（decisiveOnAsset かつ 80m 固定）で落ちる点を
+ * 意図的に含めてある: 快速艇 45m（旧: 何も起きない）と 重装艇 90m（旧: 80m 圏外で何も起きない）。
+ */
+async function testMissionRulesOfTheBlastRadius(core) {
+  const { evaluateMission } = await import('../core/sim/mission.js');
+  const scene = minimalScene(core);
+
+  /** 旗の位置と艇（id/faction/shipClass/x/y）を並べるだけの World を作る */
+  function placed(asset, boats) {
+    const world = new core.World({ scene, capacity: boats.length, protectedAsset: asset });
+    for (const b of boats) {
+      world.spawn({ id: b.id, faction: b.faction, shipClass: b.shipClass, platform: 'asv', x: b.x, y: b.y, heading: 0 });
+    }
+    return world;
+  }
+  const aliveOf = (world, id) => world.state.alive[world.state.indexOf(id)];
+  const eventTypes = (r) => r.events.map((e) => e.type);
+
+  // --- 1. 対艦: どちらかの爆破半径に入れば相討ち（半径の大きいほうが効く） ---
+  {
+    // 快速(50m) と 重装(100m) が 80m。快速の半径では届かないが、重装の 100m が双方を巻き込む
+    const world = placed({ x: 5000, y: 5000 }, [
+      { id: 'd1', faction: 'defender', shipClass: 'runner', x: 0, y: 0 },
+      { id: 'i1', faction: 'intruder', shipClass: 'heavy', x: 80, y: 0 },
+    ]);
+    const r = evaluateMission(world);
+    assert.strictEqual(aliveOf(world, 'd1'), 0, 'the defender dies too: interception is mutual destruction');
+    assert.strictEqual(aliveOf(world, 'i1'), 0, 'the intruder dies');
+    const md = r.events.find((e) => e.type === 'mutual_destruction');
+    assert.ok(md, `mutual_destruction must be emitted (got ${eventTypes(r).join(',')})`);
+    assert.strictEqual(md.blastRadiusM, 100, 'the larger blast radius (heavy) is the one that detonates');
+    assert.strictEqual(md.intruder, 'i1');
+    assert.strictEqual(md.defender, 'd1');
+    // 武装した侵入艇が居なくなったので防御側の勝ち（自軍を失っていても旗が立っていれば勝ち）
+    assert.strictEqual(r.outcome, 'defended', 'losing your own boat still counts as a defence');
+    assert.strictEqual(r.done, true);
+  }
+
+  // --- 1b. 相討ちが起きない距離 ---
+  {
+    const world = placed({ x: 5000, y: 5000 }, [
+      { id: 'd1', faction: 'defender', shipClass: 'runner', x: 0, y: 0 },
+      { id: 'i1', faction: 'intruder', shipClass: 'heavy', x: 120, y: 0 },
+    ]);
+    const r = evaluateMission(world);
+    assert.strictEqual(aliveOf(world, 'd1'), 1, '120m is outside the heavy 100m blast: nobody detonates');
+    assert.strictEqual(aliveOf(world, 'i1'), 1);
+    assert.strictEqual(r.done, false, 'the episode continues while an armed intruder lives');
+  }
+
+  // --- 2. 巻き添え: 迎撃の爆心（相討ちした2艇の中点）に旗が入れば旗も壊れる ---
+  {
+    // 中点は (40, 0)。旗をそこから 90m に置く → 爆破半径 100m の内側
+    const world = placed({ x: 40, y: 90 }, [
+      { id: 'd1', faction: 'defender', shipClass: 'runner', x: 0, y: 0 },
+      { id: 'i1', faction: 'intruder', shipClass: 'heavy', x: 80, y: 0 },
+    ]);
+    const r = evaluateMission(world);
+    assert.ok(eventTypes(r).includes('mutual_destruction'), 'the interception still happens');
+    const blast = r.events.find((e) => e.type === 'asset_destroyed_by_blast');
+    assert.ok(blast, `asset_destroyed_by_blast must be emitted (got ${eventTypes(r).join(',')})`);
+    assert.strictEqual(blast.intruder, 'i1');
+    assert.strictEqual(blast.defender, 'd1');
+    assert.strictEqual(r.outcome, 'breached', 'collateral damage to the flag is an intruder win');
+    assert.strictEqual(r.done, true);
+  }
+  {
+    // 同じ迎撃でも、旗が爆心から 150m なら無傷 → 籠城しなければ迎撃してよい、という境界
+    const world = placed({ x: 40, y: 150 }, [
+      { id: 'd1', faction: 'defender', shipClass: 'runner', x: 0, y: 0 },
+      { id: 'i1', faction: 'intruder', shipClass: 'heavy', x: 80, y: 0 },
+    ]);
+    const r = evaluateMission(world);
+    assert.ok(eventTypes(r).includes('mutual_destruction'));
+    assert.ok(!eventTypes(r).includes('asset_destroyed_by_blast'), '150m from the blast centre is outside the 100m radius');
+    assert.strictEqual(r.outcome, 'defended');
+  }
+
+  // --- 3. 対旗: 武装した侵入艇はどれでも、自分の爆破半径だけ届く（A-1） ---
+  const farDefender = { id: 'd-far', faction: 'defender', shipClass: 'runner', x: -4000, y: 0 };
+  {
+    // 快速艇 50m: 45m は内側 → 突破。旧ルール（重装限定）ではここは何も起きなかった
+    const world = placed({ x: 0, y: 0 }, [farDefender, { id: 'i-run', faction: 'intruder', shipClass: 'runner', x: 45, y: 0 }]);
+    const r = evaluateMission(world);
+    const br = r.events.find((e) => e.type === 'asset_breached');
+    assert.ok(br, `a runner inside its own 50m blast destroys the flag (got ${eventTypes(r).join(',')})`);
+    assert.strictEqual(br.intruder, 'i-run');
+    assert.strictEqual(br.blastRadiusM, 50, 'the reach is the runner own blast radius, not a shared constant');
+    assert.strictEqual(r.outcome, 'breached');
+  }
+  {
+    // 快速艇 60m: 自分の半径 50m の外 → 届かない。旧 ASSET_BREACH_RANGE_M(80m) の内側であっても関係ない
+    const world = placed({ x: 0, y: 0 }, [farDefender, { id: 'i-run', faction: 'intruder', shipClass: 'runner', x: 60, y: 0 }]);
+    const r = evaluateMission(world);
+    assert.ok(!eventTypes(r).includes('asset_breached'), '60m is outside the runner 50m reach (the old 80m constant must not decide)');
+    assert.strictEqual(r.done, false);
+  }
+  {
+    // 重装艇 90m: 自分の半径 100m の内側 → 突破。旧ルール（80m 固定）では届かなかった
+    const world = placed({ x: 0, y: 0 }, [farDefender, { id: 'i-hvy', faction: 'intruder', shipClass: 'heavy', x: 90, y: 0 }]);
+    const r = evaluateMission(world);
+    const br = r.events.find((e) => e.type === 'asset_breached');
+    assert.ok(br, `a heavy reaches 100m, further than the old 80m constant (got ${eventTypes(r).join(',')})`);
+    assert.strictEqual(br.blastRadiusM, 100);
+    assert.strictEqual(r.outcome, 'breached');
+  }
+  {
+    // 索敵艇は非武装。旗の真上に居ても何も起きない（武装した重装艇が別に生きているので継続する）
+    const world = placed({ x: 0, y: 0 }, [
+      farDefender,
+      { id: 'i-scout', faction: 'intruder', shipClass: 'scout', x: 0, y: 0 },
+      { id: 'i-hvy', faction: 'intruder', shipClass: 'heavy', x: 3000, y: 0 },
+    ]);
+    const r = evaluateMission(world);
+    assert.ok(!eventTypes(r).includes('asset_breached'), 'a scout sitting on the flag does nothing: blast radius 0');
+    assert.strictEqual(r.done, false);
+  }
+  {
+    // 索敵艇しか残っていない侵入側には旗を壊す手段が無い → その場で防御側の勝ち
+    const world = placed({ x: 0, y: 0 }, [farDefender, { id: 'i-scout', faction: 'intruder', shipClass: 'scout', x: 0, y: 0 }]);
+    const r = evaluateMission(world);
+    assert.strictEqual(r.outcome, 'defended', 'only unarmed intruders left means the defence has already succeeded');
+    assert.strictEqual(r.done, true);
+  }
+
+  // --- 4. 非武装同士は接触しても何も起きない ---
+  {
+    const world = placed({ x: 5000, y: 5000 }, [
+      { id: 'd-scout', faction: 'defender', shipClass: 'scout', x: 0, y: 0 },
+      { id: 'i-scout', faction: 'intruder', shipClass: 'scout', x: 10, y: 0 },
+      { id: 'i-hvy', faction: 'intruder', shipClass: 'heavy', x: 3000, y: 0 }, // 決着させないための生存艦
+    ]);
+    const r = evaluateMission(world);
+    assert.strictEqual(aliveOf(world, 'd-scout'), 1, 'two unarmed scouts at 10m must both survive');
+    assert.strictEqual(aliveOf(world, 'i-scout'), 1);
+    assert.deepStrictEqual(eventTypes(r), [], 'no event at all: neither side can detonate');
+    assert.strictEqual(r.done, false);
+  }
+
+  console.log('OK: blast radius decides interception, collateral damage, and the flag for every armed class');
+}
+
 async function main() {
   const core = await loadCore();
   await testRadarRangeIsConfigurable(core);
   await testObservationIsEntityBasedAndTracksFuse(core);
+  await testMissionRulesOfTheBlastRadius(core);
   await testOrdersApplyAndDefaults(core);
   await testBoatControllerFollowsOrders();
   await testSynthesizedSpawnsAreNotBornDecided(core);

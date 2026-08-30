@@ -220,7 +220,12 @@ export function parseBoatDecision(text, { boatId, contactIds }) {
     return { ok: true, obey: true, order: null, reason };
   }
 
-  const action = typeof obj.action === 'string' ? obj.action.toLowerCase().trim() : null;
+  let action = typeof obj.action === 'string' ? obj.action.toLowerCase().trim() : null;
+  // decision 欄へ直接アクション名を書く癖（{"decision":"patrol",...}）を吸収する。
+  // JSON強制(jsonMode)後の実測で全パース失敗の過半がこの形だった（2026-08-30）。
+  if (action === null && ['move_to', 'intercept', 'patrol'].includes(decision)) {
+    action = decision;
+  }
   if (action === 'move_to') {
     const wp = validatePoint(obj.waypoint ?? obj.waypoints?.[0]);
     if (!wp) return { ok: false, error: 'move_to without a usable waypoint' };
@@ -259,7 +264,10 @@ export function parseBoatDecision(text, { boatId, contactIds }) {
  *
  * @param {{boatId:string, faction:string, intervalS:number, latencyS:number,
  *   baseUrl:string, model:string, temperature?:number, maxTokens?:number,
- *   timeoutMs?:number, fetchImpl?:typeof fetch, onCall?:(record:object)=>void}} options
+ *   timeoutMs?:number, fetchImpl?:typeof fetch, onCall?:(record:object)=>void,
+ *   jsonMode?:boolean}} options
+ *   jsonMode（既定 true）: agent-io-design.md §4 の⑤（JSON強制）。艇の応答は指揮官より短く
+ *   スキーマも簡素なぶん、構文崩れがそのままパース失敗に直結しやすいので既定でオンにする。
  * @returns {Function & {stats: object}}
  */
 export function createLlmBoatAgentFn(options) {
@@ -275,6 +283,7 @@ export function createLlmBoatAgentFn(options) {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     fetchImpl = undefined,
     onCall = null,
+    jsonMode = true,
   } = options ?? {};
   if (!boatId) throw new Error('createLlmBoatAgentFn: boatId is required');
   if (!faction) throw new Error('createLlmBoatAgentFn: faction is required');
@@ -321,6 +330,7 @@ export function createLlmBoatAgentFn(options) {
         fetchImpl,
         systemPrompt,
         userPrompt,
+        jsonMode,
       });
       raw = res.text;
       if (res.outputTokens != null) stats.totalOutputTokens += res.outputTokens;

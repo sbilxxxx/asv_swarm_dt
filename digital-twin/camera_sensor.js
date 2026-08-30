@@ -19,7 +19,7 @@
  */
 
 import { SensorBase } from '../core/sim/sensors/sensor_base.js';
-import { SHIP_VISUAL_SCALE, SHIP_DECK_HEIGHT } from './scene_builder.js';
+import { SHIP_VISUAL_SCALE, SHIP_DECK_HEIGHT, shipVisualScaleFor } from './scene_builder.js';
 
 // ブリッジ（操舵室）の位置・高さ。船体の表示スケール（SHIP_VISUAL_SCALE）に合わせる。
 const BRIDGE_HEIGHT_ABOVE_DECK_M = 1.2 * SHIP_VISUAL_SCALE; // 操舵室の窓の高さ
@@ -41,16 +41,21 @@ export class ThreeCameraSensor extends SensorBase {
     const x = world.state.x[i];
     const y = world.state.y[i];
     const heading = world.state.heading[i];
-    const bridgeHeight = SHIP_DECK_HEIGHT + BRIDGE_HEIGHT_ABOVE_DECK_M;
+    // 艦種ごとにscene_builder.jsが船体をGroup.scaleで拡大縮小するため（艦種の見た目差・最小実装）、
+    // ブリッジ位置もここで同じ倍率を掛けないと、拡大された船体にカメラがめり込む・浮くバグになる
+    // （docs/quality-assurance-method.mdが警告する「カメラ位置バグ」と同じ形。既定艦種runnerは1.0で無変化）。
+    const classScale = shipVisualScaleFor(world.state.shipClass[i]);
+    const bridgeHeight = SHIP_DECK_HEIGHT + BRIDGE_HEIGHT_ABOVE_DECK_M * classScale;
+    const forwardOffset = BRIDGE_FORWARD_OFFSET_M * classScale;
 
     // 船体そのものの位置（＋わずかに船首側）にカメラを置く。第三者視点（船の後方から見る）にはしない。
     sensorCamera.position.set(
-      x + Math.cos(heading) * BRIDGE_FORWARD_OFFSET_M,
+      x + Math.cos(heading) * forwardOffset,
       bridgeHeight,
-      -(y + Math.sin(heading) * BRIDGE_FORWARD_OFFSET_M)
+      -(y + Math.sin(heading) * forwardOffset)
     );
-    const lookX = x + Math.cos(heading) * (BRIDGE_FORWARD_OFFSET_M + CAM_LOOK_AHEAD_M);
-    const lookY = y + Math.sin(heading) * (BRIDGE_FORWARD_OFFSET_M + CAM_LOOK_AHEAD_M);
+    const lookX = x + Math.cos(heading) * (forwardOffset + CAM_LOOK_AHEAD_M);
+    const lookY = y + Math.sin(heading) * (forwardOffset + CAM_LOOK_AHEAD_M);
     sensorCamera.lookAt(lookX, bridgeHeight * 0.55, -lookY);
 
     renderer.render(scene3d, sensorCamera);

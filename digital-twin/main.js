@@ -13,14 +13,19 @@ import { buildThreeScene } from './scene_builder.js';
 import { ThreeCameraSensor } from './camera_sensor.js';
 import { renderCameraPanel, renderRadarPanel, renderGnssPanel } from './hud.js';
 
-async function loadScenario() {
-  const res = await fetch('../core/scenarios/tokyo_bay_minimal.json');
-  if (!res.ok) throw new Error(`シナリオ読み込み失敗: ${res.status}`);
+const DEFAULT_SCENARIO = 'tokyo_bay_minimal';
+
+/** ?scenario= はswarm-sim/main.jsと同じ名前解決（core/scenarios/<name>.json）。既定は従来どおりtokyo_bay_minimal */
+async function loadScenario(params) {
+  const name = (params.get('scenario') ?? DEFAULT_SCENARIO).replace(/[^a-z0-9_]/gi, '');
+  const res = await fetch(`../core/scenarios/${name}.json`);
+  if (!res.ok) throw new Error(`シナリオ読み込み失敗: ${res.status} (${name})`);
   return res.json();
 }
 
 async function main() {
-  const scenario = await loadScenario();
+  const params = new URLSearchParams(location.search);
+  const scenario = await loadScenario(params);
   const scene = await loadSceneFromScenario(scenario);
 
   const spawnLocal = scenario.spawns.map((s) => ({ ...s, local: scene.projection.latLonToLocal(s.lat, s.lon) }));
@@ -46,6 +51,7 @@ async function main() {
     capacity: scenario.spawns.length,
     protectedAsset,
     radarRangeM: scenario.sensors?.radarRangeM,
+    radarPerShipClass: scenario.sensors?.perShipClass === true,
   });
   window.__debug = { three, world, focus, scene }; // devtools確認用フック
 
@@ -53,6 +59,7 @@ async function main() {
     world.spawn({
       id: spawn.id,
       faction: spawn.faction,
+      shipClass: spawn.shipClass,
       platform: spawn.platform,
       x: spawn.local.x,
       y: spawn.local.y,

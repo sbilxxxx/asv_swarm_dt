@@ -142,7 +142,7 @@ function deadlineParam(params) {
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const scenario = await loadScenario();
+  const scenario = await loadScenario(params);
   const scene = await loadSceneFromScenario(scenario);
   const world = new World({
     scene,
@@ -151,6 +151,8 @@ async function main() {
       ? scene.projection.latLonToLocal(scenario.protectedAssetLatLon.lat, scenario.protectedAssetLatLon.lon)
       : null,
     radarRangeM: scenario.sensors?.radarRangeM,
+    // perShipClass=true のシナリオ（艦種3種入り）は艦種ごとの探知距離を使う。headless側と同じ条件。
+    radarPerShipClass: scenario.sensors?.perShipClass === true,
   });
 
   for (const spawn of scenario.spawns) {
@@ -160,6 +162,7 @@ async function main() {
     world.spawn({
       id: spawn.id,
       faction: spawn.faction,
+      shipClass: spawn.shipClass,
       platform: spawn.platform,
       x,
       y,
@@ -280,22 +283,30 @@ async function main() {
     onMiss: timing.onMiss,
   };
   function makeBoatAgent(boatId, faction) {
+    const llmDecide = createLlmBoatAgentFn({
+      boatId,
+      faction,
+      intervalS: boatTiming.intervalS,
+      latencyS: boatTiming.latencyS,
+      baseUrl,
+      model,
+      ...(temperature !== null ? { temperature } : {}),
+      onCall: boatOnCall(boatId),
+    });
+    // 相討ちで消えた艇は判断しない＝推論を焚かない（headless 側と同じ扱い）
+    const decide = async (picture) => (picture?.dead ? null : llmDecide(picture));
+    decide.stats = llmDecide.stats;
     return {
       faction,
       side: 'llm',
       timing: boatTiming,
       kind: 'boat',
-      buildPicture: () => buildBoatPicture(world, boatId, { episode: env.logger.currentEpisode }),
-      decide: createLlmBoatAgentFn({
-        boatId,
-        faction,
-        intervalS: boatTiming.intervalS,
-        latencyS: boatTiming.latencyS,
-        baseUrl,
-        model,
-        ...(temperature !== null ? { temperature } : {}),
-        onCall: boatOnCall(boatId),
-      }),
+      buildPicture: () => {
+        const bi = world.state.indexOf(boatId);
+        if (bi < 0 || !world.state.alive[bi]) return { boatId, dead: true };
+        return buildBoatPicture(world, boatId, { episode: env.logger.currentEpisode });
+      },
+      decide,
     };
   }
 
@@ -381,6 +392,15 @@ async function main() {
     appendSystemEntry({
       text: '初回の推論はモデルのロードで数秒〜10秒かかります（実測 8.7s）。その間シムは停止し「推論待ち」と表示されます',
       tone: 'warn',
+    });
+  }
+  // 艦種が複数混在するシナリオでは、地図上の形の違い（agent_view.js）の読み方を最初に1行出しておく。
+  // この俯瞰図は神の視点で艦種を隠さない一方、レーダー越しの視界（radar.js）は艦種を返さない――
+  // 両者が同じ「点」に見えて混同されないよう、ここで明示する。
+  if (new Set(scenario.spawns.map((s) => s.shipClass ?? 'runner')).size > 1) {
+    appendSystemEntry({
+      text: '艦種: ▲小=快速(爆破半径50m) ◇枠のみ=索敵(非武装・爆破半径0) ▲大+点線の輪=重装(爆破半径100m)。輪は爆破半径そのもの（対艦・対旗判定と同じ数値。索敵艇は非武装なので輪が無い）。艦種はこの俯瞰図だけの表示で、レーダー越しの視界には出ない',
+      tone: 'muted',
     });
   }
 

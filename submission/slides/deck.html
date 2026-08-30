@@ -1,0 +1,336 @@
+<meta charset="utf-8">
+<title>マルチASVスウォームの攻防シミュレーション</title>
+<style>
+  @page { size: 1280px 720px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0b1622; font-family: "Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic", sans-serif; }
+  .slide {
+    width: 1280px; height: 720px; position: relative; overflow: hidden;
+    background: linear-gradient(160deg, #0d1a29 0%, #0b1622 55%, #0a141f 100%);
+    color: #e8f0f7; padding: 54px 66px; page-break-after: always;
+    display: flex; flex-direction: column;
+  }
+  .slide::before {
+    content: ""; position: absolute; left: 0; top: 0; width: 100%; height: 4px;
+    background: linear-gradient(90deg, #4ea3e0 0%, #5fc9a0 50%, #e0b84e 100%);
+  }
+  .num { position: absolute; right: 32px; bottom: 24px; font-size: 15px; color: #55708c; letter-spacing: .08em; }
+  h1 { font-size: 60px; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
+  h2 { font-size: 36px; font-weight: 700; letter-spacing: .01em; }
+  .kick { font-size: 16px; color: #4ea3e0; font-weight: 700; letter-spacing: .18em; margin-bottom: 12px; }
+  .lead { font-size: 22px; color: #b9cddf; line-height: 1.6; margin-top: 10px; }
+  .rule { height: 2px; background: #1e344a; margin: 16px 0 20px; }
+  .cols { display: flex; gap: 24px; flex: 1; min-height: 0; }
+  .card { background: #122234; border: 1px solid #1e344a; border-radius: 12px; padding: 22px 24px; flex: 1; }
+  .card h3 { font-size: 20px; margin-bottom: 12px; color: #e8f0f7; }
+  .card p, .card li { font-size: 17px; color: #b9cddf; line-height: 1.6; }
+  ul { margin-left: 20px; } li { margin-bottom: 7px; }
+  .big { font-size: 50px; font-weight: 800; color: #5fc9a0; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .big.blue { color: #4ea3e0; } .big.gold { color: #e0b84e; } .big.red { color: #e0674e; }
+  .unit { font-size: 18px; color: #8fa8bf; font-weight: 400; margin-top: 8px; display: block; line-height: 1.5; }
+  table { width: 100%; border-collapse: collapse; font-size: 17.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e344a; color: #cfe0ee; }
+  th { color: #8fa8bf; font-size: 15px; font-weight: 600; letter-spacing: .05em; }
+  td.n { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .tag { display: inline-block; font-size: 14px; padding: 3px 11px; border-radius: 99px; margin-right: 6px; }
+  .t-done { background: #12352a; color: #5fc9a0; border: 1px solid #1d5745; }
+  .t-wip { background: #33290f; color: #e0b84e; border: 1px solid #5c4a1d; }
+  .t-next { background: #12283a; color: #4ea3e0; border: 1px solid #1d4a6b; }
+  .flow { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+  .node { background: #16283c; border: 1px solid #24425f; border-radius: 9px; padding: 12px 16px; font-size: 16px; color: #dceaf5; }
+  .node.hi { border-color: #4ea3e0; background: #12293f; }
+  .node.gold { border-color: #e0b84e; background: #2a2410; }
+  .arrow { color: #547a9c; font-size: 21px; }
+  .quote { font-size: 24px; line-height: 1.6; color: #e8f0f7; border-left: 4px solid #e0b84e; padding-left: 22px; }
+  .foot { font-size: 14px; color: #6d859b; margin-top: 14px; }
+  .term { color: #e0b84e; }
+  .spacer { flex: 1; }
+</style>
+
+<!-- 1: 表紙 -->
+<div class="slide">
+  <div class="spacer"></div>
+  <div class="kick">第2回 AIエージェント社会シミュレーション・ハッカソン「メタ安全保障」</div>
+  <h1>マルチASVスウォームの<br>攻防シミュレーション</h1>
+  <div class="lead" style="font-size:24px; margin-top:20px;">
+    複数の無人ボート（ASV）が2つの陣営に分かれ、"旗"を守る側と奪う側として戦う——<br>
+    その一連の攻防を再現するシミュレーション基盤
+  </div>
+  <div class="spacer"></div>
+  <div class="foot">github.com/sbilxxxx/asv_swarm_dt ／ ブラウザで動く公開デモ（GitHub Pages）つき</div>
+  <div class="num">1</div>
+</div>
+
+<!-- 2: どんなゲームか -->
+<div class="slide">
+  <div class="kick">WHAT — どんなゲームか</div>
+  <h2>守る側は"旗"を守り切れば勝ち、攻める側は旗に届けば勝ち</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="card">
+      <h3>登場するもの</h3>
+      <p><span class="term">ASV</span>＝Autonomous Surface Vehicle。<b>人が乗らず自分で動く無人ボート</b>のこと。<br><br>
+      守備側・攻撃側それぞれが複数隻のASVからなる艦隊（＝スウォーム）を持ち、海域の中央に置かれた"旗"を挟んで対峙する。</p>
+    </div>
+    <div class="card">
+      <h3>勝敗のルール</h3>
+      <p>・攻撃側が旗にたどり着けば<b>突破</b>（攻撃側の勝ち）<br>
+      ・制限時間内に守り切れば<b>防御成功</b>（守備側の勝ち）<br>
+      ・ボート同士が至近距離で出会うと<b>双方消える</b>（相討ち）</p>
+    </div>
+    <div class="card">
+      <h3>見る画面は2種類</h3>
+      <p>同じ攻防を、3Dの海域（カメラ・レーダー視点）と2Dの俯瞰マップ（戦術図）の両方で再生できる。中身のルールはどちらも共通。</p>
+    </div>
+  </div>
+  <div class="foot">まずはこのゲームがどういうものかの全体像。仕組みや理由は次のスライド以降で説明する。</div>
+  <div class="num">2</div>
+</div>
+
+<!-- 3: なぜ作ったか -->
+<div class="slide">
+  <div class="kick">WHY — なぜ作ったか</div>
+  <h2>「AIが安全保障の判断を担う社会」を、小さな海の攻防で試す</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="card">
+      <h3>ハッカソンの主題</h3>
+      <p>今回のテーマは「メタ安全保障」——AIエージェントが意思決定に関わる社会を、実際に動くシミュレーションで検証すること。<br><br>
+      本作では、艦隊の指揮官やボート自身の判断をAIに任せたときに<b>何が起きるか</b>を実験できる場を作った。</p>
+    </div>
+    <div class="card">
+      <h3>使うAIの種類</h3>
+      <p><span class="term">LLM</span>＝文章で状況を読み、指示を返す会話AI。<br>
+      <span class="term">VLM</span>＝カメラ画像を見て判断できるAI。<br><br>
+      比較対象として、あらかじめ決めた手順で動く<b>ルールベース</b>（AIを使わない従来ロジック）も用意し、同じ土俵で比べる。</p>
+    </div>
+    <div class="card">
+      <h3>中心の問い</h3>
+      <p>指揮官の判断が遅い、あるいは情報が古いと、<b>戦況にどう影響するか</b>。<br><br>
+      この問いに答えられる基盤を作ることが今回のゴール。</p>
+    </div>
+  </div>
+  <div class="num">3</div>
+</div>
+
+<!-- 4: 全体の仕組み -->
+<div class="slide">
+  <div class="kick">HOW — 全体の仕組み</div>
+  <h2>共通のルールが1つ、それを見る画面が2つ</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="card">
+      <h3>共通ロジック <span class="tag t-done">動作</span></h3>
+      <p>世界の状態・物理演算・センサー（GNSS／レーダー）・勝敗判定・記録ログを1か所にまとめている。<br><br>
+      <b>ブラウザでも、画面なしのサーバー実行（headless）でも、同じものがそのまま動く。</b></p>
+    </div>
+    <div class="card">
+      <h3>2つの画面 <span class="tag t-done">動作</span></h3>
+      <p><b>3D海域ビュー</b> — カメラ映像・レーダー画面を模したHUD付き。<br><br>
+      <b>2D俯瞰マップ</b> — 攻防全体と各AIの判断ログを見渡せる戦術図。<br><br>
+      どちらも同じ共通ロジックの上で、同じ攻防を別の角度から映すだけ。</p>
+    </div>
+    <div class="card">
+      <h3>設計の原則</h3>
+      <p>・舞台となる海域は固定しない（設定ファイルで差し替え可能）<br>
+      ・サーバー不要・ビルド不要で、そのままウェブに公開できる<br>
+      ・2つの画面は完全に同じ座標系を使うため、見た目が違っても矛盾しない</p>
+    </div>
+  </div>
+  <div class="foot">3D・2Dとも公開URLで実際に動作。設計の正典は docs/system-design.md。</div>
+  <div class="num">4</div>
+</div>
+
+<!-- 5: 独自の仕掛け1 -->
+<div class="slide">
+  <div class="kick">独自の仕掛け① — 見ている情報が違う</div>
+  <h2>指揮官と現場のボートは、<span style="color:#e0b84e">違う情報を違うタイミング</span>で見て判断する</h2>
+  <div class="rule"></div>
+  <div class="flow" style="margin-bottom:18px;">
+    <div class="node">レーダー／GNSS<br><span style="font-size:13px;color:#8fa8bf">位置を測る仕組み</span></div><span class="arrow">→</span>
+    <div class="node hi">陣営全体の状況図<br><span style="font-size:14px;color:#8fa8bf">広いが、情報は少し古い</span></div><span class="arrow">→</span>
+    <div class="node gold">指揮官AI</div><span class="arrow">→</span>
+    <div class="node">命令</div><span class="arrow">→</span>
+    <div class="node gold">現場のボートAI<br><span style="font-size:14px;color:#a89468">狭いが、情報は新しい</span></div><span class="arrow">→</span>
+    <div class="node">船が動く</div>
+  </div>
+  <div class="cols">
+    <div class="card">
+      <h3>伝言ゲームのような構造</h3>
+      <p>指揮官・現場のボート、どちらのAIも「状況を受け取り、命令を返す（または何もしない）」という<b>同じ形の判断</b>をしている。<br><br>
+      形が同じだから、ルールベースとLLMを同じ土俵の上で差し替えて比較できる。</p>
+    </div>
+    <div class="card">
+      <h3>役割の違いはプロンプトで作らない</h3>
+      <p>指揮官には<b>広いが古い</b>陣営全体の状況図を、現場のボートには<b>狭いが新しい</b>その場の観測結果を渡す。<br><br>
+      「知っていることの食い違い」をあえて入力の設計で作ることで、指揮系統に意味が生まれる。</p>
+    </div>
+  </div>
+  <div class="num">5</div>
+</div>
+
+<!-- 6: 独自の仕掛け2 -->
+<div class="slide">
+  <div class="kick">独自の仕掛け② — 考えている間も時間は進む</div>
+  <h2>AIが返事を返すまでの間、船は<span style="color:#e0674e">"古い命令"のまま</span>動き続ける</h2>
+  <div class="rule"></div>
+  <div class="flow" style="margin-bottom:20px;">
+    <div class="node hi">指示を出す<br><span style="font-size:13px;color:#8fa8bf">状況を送る瞬間</span></div><span class="arrow">→</span>
+    <div class="node">AIが考えている間<br><span style="font-size:13px;color:#8fa8bf">この間、船は前の命令のまま動く</span></div><span class="arrow">→</span>
+    <div class="node hi">指示が届く<br><span style="font-size:13px;color:#8fa8bf">新しい命令に切り替わる瞬間</span></div>
+  </div>
+  <div class="cols">
+    <div class="card">
+      <h3>なぜ重要か①：公平に比較できる</h3>
+      <p>この「考えている時間」は実際の計算時間の実測値ではなく、<b>あらかじめ決めた設定値</b>。<br><br>
+      だから、ルールベースの指揮官とLLMの指揮官を<b>同じ遅さの条件</b>で比べられる。より速いパソコンに変えても<b>シミュレーションの結果は変わらない</b>——変わるのは実行にかかる実時間だけ。</p>
+    </div>
+    <div class="card">
+      <h3>なぜ重要か②：実験の軸にできる</h3>
+      <p>「命令をどれだけ待つか」「間に合わなかったらどうするか」までが設定値なので、<br><br>
+      <b>「指揮が遅い陣営は負けるのか」「指揮系統が途切れたら何が起きるか」を、コードを変えずに設定を変えるだけで問える。</b></p>
+    </div>
+  </div>
+  <div class="foot">正典: docs/time-model.md（v2.0）。実装: core/sim/command/decision_scheduler.js。挙動の一致はテストで担保。</div>
+  <div class="num">6</div>
+</div>
+
+<!-- 7: 実測の証拠 -->
+<div class="slide">
+  <div class="kick">実測 — 動いていることの証拠</div>
+  <h2>設計より実測が先、という家訓</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="card">
+      <div class="big blue">1,554</div>
+      <span class="unit"><b>回の実LLM推論</b>（150エピソード連続）<br>ローカルLLM（Ollama・qwen2.5:7b）で実行<br>解析失敗 1件／通信失敗 0件</span>
+    </div>
+    <div class="card">
+      <div class="big">108,600</div>
+      <span class="unit"><b>1秒あたりのシミュレーション更新回数</b>（3隻・CPU1コア）<br>30隻でも6,400回/秒<br>headless実行で多数体×多エピソードに拡張可能</span>
+    </div>
+    <div class="card">
+      <div class="big gold">VLM閉ループ</div>
+      <span class="unit"><b>実際のレンダリング画像で成立</b>（8/30）<br>3DCGの一人称視点画像 → VLMが判断 → 航路を決定 → 船が動く、まで一通り繋がった<br>AI応答 中央値1.78秒／画像生成 中央値84–115ミリ秒</span>
+    </div>
+  </div>
+  <div class="foot">すべてリポジトリ同梱のスクリプトで再現可能（scripts/headless_run.js・llm_probe.js・vlm_probe.js・vlm_navigator_run.js）。</div>
+  <div class="num">7</div>
+</div>
+
+<!-- 8: 正直な結果 -->
+<div class="slide">
+  <div class="kick">正直な結果 — うまくいかなかったこと</div>
+  <h2>指揮官をAIにしても、<span style="color:#e0674e">従来ロジックに有意には勝てなかった</span></h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="card">
+      <h3>測ったこと</h3>
+      <p>3パターンを比較した：①両陣営ともルールベース ②指揮官だけLLM ③両陣営ともLLM。各25エピソード。<br><br>
+      同じ条件で繰り返し試行しても、勝率は<b>約12ポイントの範囲でばらつく</b>。LLM指揮官とルールベース指揮官の勝率の差はこのばらつきの範囲に収まってしまい、<b>統計的に「差がある」とは言えなかった</b>（有意差なし）。差を確かめるには1パターンあたり約170エピソードが必要と分かった。</p>
+    </div>
+    <div class="card">
+      <h3>診断 — なぜか</h3>
+      <p>指揮の中身には確かに欠陥があった。<b>移動命令の80.9%が、直前と同じ座標への送り直し</b>——つまり行き先が更新されないまま同じ命令を出し続けていた。<br><br>
+      だが根本原因はAIの弱さではなく——<br>
+      <b style="color:#e0b84e">盤面のルール側に、賢く指揮しても差が出る余地が無かった。</b><br>
+      指揮を工夫しても結果が変わらないなら、それは指揮官の問題ではなくゲーム設計の問題である。</p>
+    </div>
+  </div>
+  <div class="foot">この帰無結果は docs/l0-experiment-log.md に測定条件つきで記録し、READMEにも明記している（McNemar検定 p = 0.45）。</div>
+  <div class="num">8</div>
+</div>
+
+<!-- 9: 盤面の作り直し -->
+<div class="slide">
+  <div class="kick">対応 — 盤面の作り直し</div>
+  <h2>「どこまで近づいてよいか」が勝敗を分けるゲームへ</h2>
+  <div class="rule"></div>
+  <div class="cols" style="flex:0 0 auto;">
+    <div class="card" style="padding:18px 22px;">
+      <p style="margin-bottom:10px; font-size:16px; color:#8fa8bf;">3種類のASVに役割を分けた。将棋の駒に例えると、下の対応になる。</p>
+      <table>
+        <tr><th>艦種</th><th>将棋でいうと</th><th>速力</th><th>探知距離</th><th>爆破半径</th><th>役割</th></tr>
+        <tr><td><b>快速艇</b></td><td>歩</td><td class="n">9 m/s</td><td class="n">300 m</td><td class="n">50 m</td><td>先鋒・護衛</td></tr>
+        <tr><td><b>索敵艇</b></td><td>金</td><td class="n">6 m/s</td><td class="n" style="color:#5fc9a0">1200 m</td><td class="n">0 m<span style="font-size:13px;color:#8fa8bf"> 非武装</span></td><td>目（偵察役）</td></tr>
+        <tr><td><b>重装艇</b></td><td>飛車</td><td class="n">4 m/s</td><td class="n">400 m</td><td class="n" style="color:#e0674e">100 m</td><td>本命（主力）</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="cols" style="margin-top:20px;">
+    <div class="card">
+      <h3>爆破半径 — 1つの数字が3つの意味を持つ</h3>
+      <p><b>1. 対艦</b>：この距離で相手を捉えれば、相討ちで双方が消える<br>
+      <b>2. 対旗</b>：この距離まで旗に近づけば、旗を破壊できる<br>
+      <b style="color:#e0b84e">3. 巻き添え</b>：迎撃した位置がこの距離内なら、旗も一緒に壊れる<br><br>
+      <b>3があるから、守備側は旗の真上で待ち構えられない。必ず前に出て迎撃する必要がある。</b></p>
+    </div>
+    <div class="card">
+      <h3>中核にある不確実性</h3>
+      <p class="quote" style="font-size:20px; padding-left:18px;">レーダーには「点」しか映らない。<br>それがどの艦種かは分からない。</p>
+      <p style="margin-top:14px;">本命（重装艇）がどれかは、近づいて識別するまで分からない——<b>その識別を次段階でVLMに担わせる</b>。</p>
+    </div>
+  </div>
+  <div class="num">9</div>
+</div>
+
+<!-- 10: 検証 -->
+<div class="slide">
+  <div class="kick">検証 — 新しい盤面は決着するか（2026-08-30 実測）</div>
+  <h2>勝敗が<span style="color:#5fc9a0">散らばった</span>。ゲームとして成立している</h2>
+  <div class="rule"></div>
+  <div class="cols" style="flex:0 0 auto;">
+    <div class="card" style="text-align:center;">
+      <div class="big">16</div><span class="unit">防御成功 <b>80%</b></span>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="big red">4</div><span class="unit">突破 <b>20%</b></span>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="big gold">0</div><span class="unit">時間切れ<br><span style="font-size:16px">全20エピソードが決着</span></span>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="big blue">31.5<span style="font-size:26px">秒</span></div><span class="unit">平均決着時刻<br><span style="font-size:16px">制限240秒に対して</span></span>
+    </div>
+  </div>
+  <div class="cols" style="margin-top:20px;">
+    <div class="card">
+      <h3>決着時刻が<b style="color:#e0b84e">2つの山</b>に分かれた</h3>
+      <p>防御成功は<b>16〜35秒</b>に集中し、突破は<b>75〜81秒</b>に集中した。その中間はほとんど無い。<br><br>
+      「足の速い快速艇を序盤に止められたか」「足の遅い重装艇が生き延びて旗まで届いたか」で勝敗が分かれている——<b>設計時に狙った2段階の時間割が、実際の盤面の上で効いている</b>。</p>
+    </div>
+    <div class="card">
+      <h3>再現できること</h3>
+      <p>両陣営ルールベースの統制群は<b>完全に決定論的</b>（乱数も実時刻も使わない）。<b>誰がどの環境で実行しても、1バイト単位で同じ結果</b>になる。</p>
+      <p style="margin-top:12px; font-size:16px; color:#8fa8bf; font-family:monospace; background:#0d1a29; padding:12px 14px; border-radius:8px; line-height:1.5;">node scripts/headless_run.js<br>&nbsp;&nbsp;--scenario flag_defence_squadrons<br>&nbsp;&nbsp;--episodes 20</p>
+    </div>
+  </div>
+  <div class="num">10</div>
+</div>
+
+<!-- 11: 現在地と今後 -->
+<div class="slide">
+  <div class="kick">現在地と今後</div>
+  <h2>穴は「AIが1つも動いていない」から「主題であるAIの活躍がまだ足りない」へ</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="card">
+      <h3>到達点</h3>
+      <p><span class="tag t-done">実測済</span> 共通ロジック・攻防の勝敗判定・記録ログ<br>
+      <span class="tag t-done">実測済</span> 「考えている間も時間は進む」仕組み（発行→発効・締切・不成立）<br>
+      <span class="tag t-done">実測済</span> 指揮官LLM 1,554推論／3パターン比較<br>
+      <span class="tag t-done">実測済</span> VLM閉ループ（実レンダリング画像・1隻分）<br>
+      <span class="tag t-done">実測済</span> 新盤面で決着（20エピソード・80%/20%・時間切れ0）<br>
+      <span class="tag t-wip">実装済</span> 現場のボートAI（艇レベルLLMの骨格）</p>
+    </div>
+    <div class="card">
+      <h3>次にやること</h3>
+      <p><span class="tag t-next">次</span> 識別台帳 — 近づいたら艦種が分かる仕組み<br>
+      <span class="tag t-next">次</span> 現場のボートAIの本格運用（主題の本体）<br>
+      <span class="tag t-next">次</span> VLM索敵艇 — カメラ画像から本命（重装艇）を見抜く<br><br>
+      <b>計算資源が必要な理由</b>：勝率の差を確かめるには1パターンあたり約170エピソードが要る。手元のGPU（RTX 3060）では6隻を回すのに<b>処理能力が3.4倍足りない</b>ことを実測済み。</p>
+    </div>
+  </div>
+  <div class="foot">環境の違いは実行スピードにだけ現れ、ゲームの意味には現れない — 遅延が設定値だから、環境を移しても結果は変わらない。</div>
+  <div class="num">11</div>
+</div>

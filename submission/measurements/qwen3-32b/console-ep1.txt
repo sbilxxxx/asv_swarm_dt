@@ -1,0 +1,9 @@
+warmup: qwen3:32b loaded in 5.2s
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: kept current orders (no usable decision)
+  t=3.0 blue-commander: kept current orders (no usable decision)
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset 13.0 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: kept current orders (no usable decision)
+  t=4.0 def-scout: kept current orders (no usable decision)

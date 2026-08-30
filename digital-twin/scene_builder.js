@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { buildLandmarks } from './landmarks.js';
+import { shipClassOf } from '../core/sim/ship_classes.js';
 
 /**
  * landmarkSet名 → ランドマーク群のビルダー関数。
@@ -216,6 +217,23 @@ export const SHIP_VISUAL_SCALE = 2.2;
  * 船が水面から浮いて見える（実測で判明）。喫水線が船体下部に来る高さにする。
  */
 export const SHIP_DECK_HEIGHT = 0.3 * SHIP_VISUAL_SCALE;
+
+/**
+ * 艦種ごとの表示スケール倍率（core/sim/ship_classes.jsの艦種名がキー）。
+ * 船体ジオメトリ（buildHullGeometries）は艦種間で共有し1つだけ生成する——差はThree.jsの
+ * Group.scaleだけで付ける（新規ロフト生成・頂点コスト増なし。swarm-sim/agent_view.jsの
+ * 艦種別マーカーと対になる3D側の最小実装）。基準1.0は快速艇・未知艦種。
+ * 【camera_sensor.jsとの結合に注意】ブリッジ視点（bridgeHeight・船首方向オフセット）は
+ * SHIP_VISUAL_SCALEを基準にした固定値だが、船体がここでさらにスケールされるため、
+ * 艦種ごとの倍率をcamera_sensor.js側にも掛けないとブリッジがめり込む/浮く
+ * （docs/quality-assurance-method.mdが警告する「カメラ位置バグ」と同じ形）。
+ */
+export const SHIP_CLASS_VISUAL_SCALE = { runner: 1, scout: 0.82, heavy: 1.32 };
+
+/** @param {string|null|undefined} shipClass @returns {number} */
+export function shipVisualScaleFor(shipClass) {
+  return SHIP_CLASS_VISUAL_SCALE[shipClass] ?? 1;
+}
 
 /**
  * 船体形状（品質向上計画 優先度3・本命）。
@@ -550,7 +568,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
 
   const ships = new Map(); // id -> { group, hull, wake, wakeMat }
 
-  function ensureShip(id, faction) {
+  function ensureShip(id, faction, shipClass) {
     if (ships.has(id)) return ships.get(id);
     // 遠目・逆光でも水面から識別できるよう、はっきりした高彩度色にする
     const hullColor = faction === 'defender' ? 0x1f9fe0 : 0xe6394f;
@@ -661,6 +679,26 @@ export function buildThreeScene(canvas, scene, options = {}) {
       group.add(cleat);
     });
 
+    // 積荷クレート（艦種の形の差・最小実装）: 武装艦（blastRadiusM>0）だけデッキに積む。
+    // サイズ・大きさだけでは遠目に差が伝わりにくいため、部品の有無で見た目を変える——
+    // swarm-sim/agent_view.jsの爆破半径リング（非武装の索敵艇には輪が無い）と対になる3D側のサイン。
+    // 重装は快速より大きい積荷（爆破半径100m vs 50m）にして、輪郭にも脅威度の差が出るようにする。
+    const cls = shipClassOf(shipClass);
+    if (cls.blastRadiusM > 0) {
+      const crateScale = cls.blastRadiusM >= 100 ? 1.0 : 0.62;
+      const crateMat = new THREE.MeshStandardMaterial({ color: 0xb5501f, roughness: 0.65, metalness: 0.05 });
+      const crateX = 1.3 * s;
+      const crateProfile = hullProfileAtX(crateX / s);
+      const crate = new THREE.Mesh(
+        new THREE.BoxGeometry(0.95 * s * crateScale, 0.6 * s * crateScale, 0.9 * s * crateScale),
+        crateMat
+      );
+      crate.position.set(crateX, crateProfile.deckY * s + 0.3 * s * crateScale, 0);
+      crate.castShadow = true;
+      crate.receiveShadow = true;
+      group.add(crate);
+    }
+
     // 加算合成で「光る航跡」にする（参考にした操船シミュレータのwakeスプライトと同じ狙い）
     const wakeMat = new THREE.MeshBasicMaterial({
       map: wakeTexture,
@@ -700,6 +738,10 @@ export function buildThreeScene(canvas, scene, options = {}) {
       group.add(bowWave);
     });
 
+    // 艦種ごとのサイズ差（品質向上計画の対象外の最小実装）。船体ジオメトリは共有したまま
+    // Group.scaleだけで差を付ける。camera_sensor.jsのブリッジオフセットも同じ倍率を掛けて追従させる。
+    group.scale.setScalar(shipVisualScaleFor(shipClass));
+
     scene3d.add(group);
     const entry = { group, wakeMat };
     ships.set(id, entry);
@@ -728,7 +770,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
   function updateShips(entities, elapsedSeconds = 0) {
     let target = null;
     for (const e of entities) {
-      const { group, wakeMat } = ensureShip(e.id, e.faction);
+      const { group, wakeMat } = ensureShip(e.id, e.faction, e.shipClass);
 
       // 波の局所形状。水面シェーダーと同じくシミュレーション座標をそのまま使う
       // （海面LODで近傍パッチが船を追従して動くため、center基準のオフセットは使えない。上のwaveHeightAt参照）
