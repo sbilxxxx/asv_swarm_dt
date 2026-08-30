@@ -44,6 +44,7 @@ import { computeBoatActions } from '../core/sim/command/boat_controller.js';
 import { buildFusedPicture } from '../core/sim/command/fused_picture.js';
 import { scriptedDefenderCommander, scriptedIntruderCommander } from '../core/sim/command/scripted_commanders.js';
 import { createLlmCommanderFn } from '../core/sim/command/llm_commander.js';
+import { buildBoatPicture, createLlmBoatAgentFn } from '../core/sim/agents/boat_agent.js';
 import { createProjection, drawMap, drawProtectedAsset, drawOrders } from './map_view.js';
 import { drawAgents } from './agent_view.js';
 import { CommsPulses } from './comms_view.js';
@@ -82,12 +83,25 @@ const COMM_LOG_MIN_INTERVAL_S = 2;
 /** 指揮サイクル・発効遅延の既定（?interval= / ?latency= で上書き可。headless の既定と同一） */
 const DEFAULT_COMMAND_INTERVAL_S = 10;
 const DEFAULT_COMMAND_LATENCY_S = 3;
+/**
+ * 艇の判断サイクル・発効遅延の既定（?boatinterval= / ?boatlatency= で上書き可）。
+ * 指揮官より速く・短く決める: 艇は自分のレーダーだけを見ており、指揮官の統合図より
+ * 新しい情報を持つ。その差が判断に現れるためには、指揮官より高い頻度で決められなければ
+ * ならない。一方で艇の数だけ推論が増えるので、間隔を詰めすぎると 3060 級では
+ * 「推論待ち」で画面が止まり続ける（docs/development-roadmap.md §5 の処理能力の話）。
+ */
+const DEFAULT_BOAT_INTERVAL_S = 6;
+const DEFAULT_BOAT_LATENCY_S = 1;
 /** LLM モードの既定ベースURL（OpenAI 互換。開発は Ollama、GPU サーバーでは vLLM） */
 const DEFAULT_LLM_BASE_URL = 'http://localhost:11434/v1';
 
-async function loadScenario() {
-  const res = await fetch('../core/scenarios/tokyo_bay_minimal.json');
-  if (!res.ok) throw new Error(`シナリオ読み込み失敗: ${res.status}`);
+/** 既定は艦種入りの攻防シナリオ。?scenario=tokyo_bay_minimal で旧・3隻シナリオに戻せる */
+const DEFAULT_SCENARIO = 'flag_defence_squadrons';
+
+async function loadScenario(params) {
+  const name = (params.get('scenario') ?? DEFAULT_SCENARIO).replace(/[^a-z0-9_]/gi, '');
+  const res = await fetch(`../core/scenarios/${name}.json`);
+  if (!res.ok) throw new Error(`シナリオ読み込み失敗: ${name} (${res.status})`);
   return res.json();
 }
 
@@ -189,7 +203,23 @@ async function main() {
     };
   }
 
-  /** @returns {{faction:string, side:string, timing:object, decide:(picture:object)=>Promise<object|null>}} */
+  /** 艇エージェントの1判断ごとの結末をログパネルへ出す（obey も override も見えるようにする） */
+  function boatOnCall(boatId) {
+    return (record) => {
+      const seconds = (record.latencyMs / 1000).toFixed(1);
+      const tail = record.reason ? ` — ${record.reason}` : record.failure ? ` — ${record.failure}` : '';
+      appendSystemEntry({
+        t: record.t,
+        text: `BOAT ${boatId}: ${record.outcome} (${seconds}s 実時間)${tail}`,
+        tone: record.outcome === 'override' ? 'info' : record.outcome === 'obey' ? 'muted' : 'warn',
+      });
+    };
+  }
+
+  /**
+   * @returns {{faction:string, side:string, timing:object, kind:string,
+   *   buildPicture:(t:number)=>object, decide:(picture:object)=>Promise<object|null>}}
+   */
   function makeCommander(id, side, faction) {
     if (side === 'llm') {
       if (!model) {
@@ -203,6 +233,8 @@ async function main() {
           faction,
           side,
           timing,
+          kind: 'commander',
+          buildPicture: () => buildFusedPicture(world, faction, { episode: env.logger.currentEpisode }),
           decide: createLlmCommanderFn({
             faction,
             intervalS: timing.intervalS,
@@ -221,22 +253,80 @@ async function main() {
     // scripted は同期関数。LLM 腕と同じ「統合図→{orders,intent}」の型に合わせて async で包むだけで、
     // 発効遅延（latencyS）は同じくスケジューラが与える＝速度差という交絡因子は入らない（§9）。
     const fn = faction === 'defender' ? scriptedDefenderCommander : scriptedIntruderCommander;
-    return { faction, side: 'scripted', timing, decide: async (picture) => fn(picture) };
+    return {
+      faction,
+      side: 'scripted',
+      timing,
+      kind: 'commander',
+      buildPicture: () => buildFusedPicture(world, faction, { episode: env.logger.currentEpisode }),
+      decide: async (picture) => fn(picture),
+    };
   }
 
   const commanders = new Map([
     ['blue-commander', makeCommander('blue-commander', params.get('blue') ?? 'scripted', 'defender')],
     ['red-commander', makeCommander('red-commander', params.get('red') ?? 'scripted', 'intruder')],
   ]);
-  const scheduler = new DecisionScheduler();
-  for (const [id, commander] of commanders) scheduler.register(id, commander.timing);
 
-  const usesLlm = [...commanders.values()].some((c) => c.side === 'llm');
+  /**
+   * 艇エージェント（Phase 2）。指揮官とまったく同じ型で作るので、スケジューラから見て
+   * 両者は区別されない＝時間の扱い・推論待ち・発効・ログが同じ経路を通る。
+   * 艇に固有なのは buildPicture（自分のレーダーだけの視界）と decide の中身だけ。
+   */
+  const boatTiming = {
+    intervalS: positiveNumberParam(params, 'boatinterval', DEFAULT_BOAT_INTERVAL_S),
+    latencyS: positiveNumberParam(params, 'boatlatency', DEFAULT_BOAT_LATENCY_S),
+    deadlineS: timing.deadlineS,
+    onMiss: timing.onMiss,
+  };
+  function makeBoatAgent(boatId, faction) {
+    return {
+      faction,
+      side: 'llm',
+      timing: boatTiming,
+      kind: 'boat',
+      buildPicture: () => buildBoatPicture(world, boatId, { episode: env.logger.currentEpisode }),
+      decide: createLlmBoatAgentFn({
+        boatId,
+        faction,
+        intervalS: boatTiming.intervalS,
+        latencyS: boatTiming.latencyS,
+        baseUrl,
+        model,
+        ...(temperature !== null ? { temperature } : {}),
+        onCall: boatOnCall(boatId),
+      }),
+    };
+  }
+
+  // ?boats=llm で艇に判断を持たせる。既定（無指定）は従来どおり艇は追従制御だけの機械。
+  const boatsMode = params.get('boats') ?? 'scripted';
+  const boatAgents = new Map();
+  if (boatsMode === 'llm') {
+    if (!model) {
+      console.warn('swarm-sim: ?boats=llm には ?model= が必要です。艇の判断は無効のまま継続します');
+      appendSystemEntry({ text: '?boats=llm には ?model= が必要です。艇は追従制御のみで継続します', tone: 'warn' });
+    } else {
+      for (let i = 0; i < world.state.count; i++) {
+        boatAgents.set(world.state.id[i], makeBoatAgent(world.state.id[i], world.state.faction[i]));
+      }
+    }
+  } else if (boatsMode !== 'scripted') {
+    console.warn(`swarm-sim: 未知の艇指定 "${boatsMode}" のため艇の判断は無効のまま継続します`);
+  }
+
+  /** 指揮官と艇を同じ台帳に載せる。以降のループは両者を区別しない */
+  const deciders = new Map([...commanders, ...boatAgents]);
+  const scheduler = new DecisionScheduler();
+  for (const [id, decider] of deciders) scheduler.register(id, decider.timing);
+
+  const usesLlm = [...deciders.values()].some((c) => c.side === 'llm');
   function sideLabel(id) {
     const side = commanders.get(id).side;
     return side === 'llm' ? `llm(${model})` : side;
   }
-  const modeText = `blue=${sideLabel('blue-commander')} red=${sideLabel('red-commander')}`;
+  const boatsLabel = boatAgents.size > 0 ? ` boats=llm×${boatAgents.size}` : '';
+  const modeText = `blue=${sideLabel('blue-commander')} red=${sideLabel('red-commander')}${boatsLabel}`;
 
   // --- 描画まわり ---
   const canvas = document.getElementById('map-canvas');
@@ -297,11 +387,18 @@ async function main() {
   /** 1. 発効（§8-1）。適用してから発行するので、同ステップの統合図は最新の指示を映す */
   function applyDueOrders(t) {
     for (const id of scheduler.dueToApply(t)) {
-      const commander = commanders.get(id);
+      const decider = deciders.get(id);
       const decision = scheduler.takeResult(id);
       if (decision?.orders?.length > 0) {
-        const { applied, ignored } = applyOrders(world, commander.faction, decision.orders);
+        const { applied, ignored } = applyOrders(world, decider.faction, decision.orders);
         appendOrdersEntry({ t, commander: id, count: applied, ignored, intent: decision.intent });
+        // 艇の上書きが指揮官の指示を塗り替えた瞬間を名指しで残す。調停規則は置いていないので
+        // （後から発効したほうが勝つ）、どちらが最後に書いたかはログでしか追えない。
+        if (decider.kind === 'boat' && applied > 0) overrideTally.total += 1;
+      } else if (decider.kind === 'boat') {
+        // 艇の null は「指揮官の指示に従う」＝正常な判断であり、失敗ではない。
+        // 指揮官の null（＝推論の失敗）と同じ調子で警告を出すと、両者の区別が付かなくなる。
+        continue;
       } else {
         // decision が null ＝ 推論の失敗（llm_commander は失敗を null で表す）。
         // 新しい指示は無く、艇は現指示のまま動き続ける＝画面上は何も起きないので、行だけ残す。
@@ -314,8 +411,8 @@ async function main() {
   function settleMisses(t, nowMs) {
     for (const entry of scheduler.missedAt(t)) {
       const miss = scheduler.takeMissed(entry.id) ?? entry;
-      const commander = commanders.get(entry.id);
-      if (miss.onMiss === 'default-order') applyDefaultOrders(world, { faction: commander.faction });
+      const decider = deciders.get(entry.id);
+      if (miss.onMiss === 'default-order') applyDefaultOrders(world, { faction: decider.faction });
       appendMissEntry({ t, commander: entry.id, reason: miss.reason, onMiss: miss.onMiss });
       missNotice = { text: `不成立 ${entry.id} (${miss.reason})`, untilMs: nowMs + MISS_NOTICE_MS };
     }
@@ -328,11 +425,20 @@ async function main() {
    */
   function fireDueInferences(t) {
     for (const id of scheduler.dueToIssue(t)) {
-      const commander = commanders.get(id);
+      const decider = deciders.get(id);
+      // 死んだ艇には判断させない（撃破後も推論を投げ続けると、動かない艇のために
+      // シムが「推論待ち」で止まる）。指揮官は艇ではないので常に生きている。
+      if (decider.kind === 'boat') {
+        const i = world.state.indexOf(id);
+        if (i < 0 || !world.state.alive[i]) {
+          scheduler.provideResult(id, null, scheduler.markIssued(id, t));
+          continue;
+        }
+      }
       // 観測スナップショットは発行時刻のもの。ここから先、世界が進んでもこの図は更新しない（I3）
-      const picture = buildFusedPicture(world, commander.faction, { episode: env.logger.currentEpisode });
+      const picture = decider.buildPicture(t);
       const token = scheduler.markIssued(id, t);
-      Promise.resolve(commander.decide(picture)).then(
+      Promise.resolve(decider.decide(picture)).then(
         (decision) => scheduler.provideResult(id, decision, token),
         (err) => {
           // 失敗しても必ず結果を返す。返さないと pending が解消されず、

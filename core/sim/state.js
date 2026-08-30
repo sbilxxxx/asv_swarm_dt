@@ -13,6 +13,9 @@ export class EntityState {
 
     this.id = new Array(capacity).fill(null);
     this.faction = new Array(capacity).fill(null); // 'defender' | 'intruder' | 'neutral'
+    // 艦種（core/sim/ship_classes.js のキー）。速力・レーダー距離・爆破半径がここで決まる。
+    // 文字列なので TypedArray ではなく通常配列（id/faction と同じ扱い）。
+    this.shipClass = new Array(capacity).fill(null);
     this.x = new Float64Array(capacity);
     this.y = new Float64Array(capacity);
     this.heading = new Float64Array(capacity); // ラジアン
@@ -21,13 +24,14 @@ export class EntityState {
   }
 
   /** @returns {number} 追加したエンティティのインデックス */
-  add({ id, faction, x, y, heading = 0, speed = 0 }) {
+  add({ id, faction, shipClass = 'runner', x, y, heading = 0, speed = 0 }) {
     if (this.count >= this.capacity) {
       throw new Error('EntityState capacity exceeded');
     }
     const i = this.count++;
     this.id[i] = id;
     this.faction[i] = faction;
+    this.shipClass[i] = shipClass;
     this.x[i] = x;
     this.y[i] = y;
     this.heading[i] = heading;
@@ -44,6 +48,7 @@ export class EntityState {
       out.push({
         id: this.id[i],
         faction: this.faction[i],
+        shipClass: this.shipClass[i],
         x: this.x[i],
         y: this.y[i],
         heading: this.heading[i],

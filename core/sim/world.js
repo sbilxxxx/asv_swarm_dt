@@ -35,7 +35,11 @@ export class World {
     this.sensors = {
       gnss: new GnssSensor(),
       // 探知距離はシナリオ（scenario.sensors.radarRangeM）から渡す。未指定なら従来既定値。
-      radar: new RadarSensor(config.radarRangeM ? { rangeM: config.radarRangeM } : {}),
+      // perShipClass を立てると艇ごとに艦種の探知距離を使う（艦種入りシナリオ）。
+      radar: new RadarSensor({
+        ...(config.radarRangeM ? { rangeM: config.radarRangeM } : {}),
+        ...(config.radarPerShipClass ? { perShipClass: true } : {}),
+      }),
       camera: config.cameraSensor ?? new UnimplementedCameraSensor(),
     };
     this.environment = config.environment ?? new CalmSeaEnvironment();
@@ -63,7 +67,9 @@ export class World {
   spawn(spec) {
     const index = this.state.add(spec);
     const PlatformClass = platformRegistry[spec.platform ?? 'asv'];
-    this.platformInstances.set(spec.id, new PlatformClass());
+    // 運動性能は艦種から決まる。艦種は EntityState にも入っているので、
+    // Platform 側とセンサー側（radar.js）が同じ1つの出所を読む。
+    this.platformInstances.set(spec.id, new PlatformClass({ shipClass: spec.shipClass }));
     if (spec.agent) this.agents.set(spec.id, spec.agent);
     // 位置・針路のみ控える（agentインスタンスはreset後も再利用する）
     this.spawnSpecs.push({ id: spec.id, x: spec.x, y: spec.y, heading: spec.heading ?? 0 });
