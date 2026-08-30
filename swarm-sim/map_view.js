@@ -96,3 +96,56 @@ export function drawProtectedAsset(ctx, canvas, scene, project, asset) {
 
   ctx.restore();
 }
+
+/**
+ * 各艇の現在の指示（WP・哨戒中心・迎撃目標の最終確認位置）を細い破線で描画する。
+ * 指揮官の采配が画面で追えるようにするためのもの。v2 では艇の動きはすべて
+ * 「現在の指示への追従」（core/sim/command/boat_controller.js）で決まるので、
+ * この線が無いと画面から「艇がなぜそこへ向かうのか」が消える。
+ *
+ * 縮尺（m→px）は project() の差分から求める。computeScale() と同じ値になるので、
+ * canvas・scene を引数に足さずに済み、座標変換の出所を1つに保てる。
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {import('../core/sim/world.js').World} world
+ * @param {(x:number, y:number) => {px:number, py:number}} project
+ */
+export function drawOrders(ctx, world, project) {
+  const state = world.state;
+  const pxPerM = project(1, 0).px - project(0, 0).px;
+
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  for (let i = 0; i < state.count; i++) {
+    if (!state.alive[i]) continue;
+    const order = world.orders.get(state.id[i]);
+    if (!order) continue;
+
+    let dest = null;
+    if (order.action === 'move_to') dest = order.waypointWorld;
+    else if (order.action === 'patrol') dest = order.centerWorld;
+    else if (order.action === 'intercept') dest = order.lastKnown;
+    // intercept で発令時にトラックが無かった場合（lastKnown=null）は描く点が無い。
+    // 艇は緩い旋回で捜索するだけなので、線を引かないことがそのまま「手がかり無し」を表す。
+    if (!dest) continue;
+
+    const a = project(state.x[i], state.y[i]);
+    const b = project(dest.x, dest.y);
+    ctx.strokeStyle = state.faction[i] === 'defender' ? 'rgba(120,200,255,0.5)' : 'rgba(255,140,140,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(a.px, a.py);
+    ctx.lineTo(b.px, b.py);
+    ctx.stroke();
+    ctx.strokeRect(b.px - 3, b.py - 3, 6, 6);
+
+    // 哨戒は「点」ではなく「範囲」の指示なので、半径も描く（radiusM は applyOrders が
+    // 正規化済み。防護対象の突破判定円と同じく、見た目とルールの数値をズラさない）
+    if (order.action === 'patrol' && order.radiusM > 0) {
+      ctx.beginPath();
+      ctx.arc(b.px, b.py, order.radiusM * pxPerM, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}

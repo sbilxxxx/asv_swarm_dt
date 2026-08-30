@@ -8,19 +8,28 @@
  */
 
 import { PlatformBase } from './platform_base.js';
-
-const MAX_SPEED_MPS = 6; // 目安値。要調整
-const MAX_TURN_RATE_RAD_S = 0.5; // 目安値。要調整
-const ACCEL_MPS2 = 1.5; // 目安値。要調整
+import { shipClassOf } from '../ship_classes.js';
 
 export class AsvPlatform extends PlatformBase {
+  /**
+   * 運動性能は艦種から決まる（core/sim/ship_classes.js）。艦種ごとに別クラスを作らず
+   * 1クラスをパラメータで振り分けるのは、差が「表の数値」であって挙動の型ではないから。
+   * @param {{shipClass?: string}} [config] - 省略時は既定艦種（後方互換: 従来の単一性能に近い runner ではなく
+   *   ship_classes.js の DEFAULT_SHIP_CLASS が使われる）
+   */
+  constructor(config = {}) {
+    super(config);
+    this.shipClass = shipClassOf(config.shipClass);
+  }
+
   // B-3対応: environment.sample()を運動学に配線。差し込み口を「効く」状態にする。
   step(state, index, action, dt, environment, t) {
     const throttle = clamp(action?.throttle ?? 0, -1, 1);
     const steering = clamp(action?.steering ?? 0, -1, 1);
+    const { maxSpeedMps, maxTurnRateRadS, accelMps2 } = this.shipClass;
 
-    state.speed[index] = clamp(state.speed[index] + throttle * ACCEL_MPS2 * dt, 0, MAX_SPEED_MPS);
-    state.heading[index] += steering * MAX_TURN_RATE_RAD_S * dt;
+    state.speed[index] = clamp(state.speed[index] + throttle * accelMps2 * dt, 0, maxSpeedMps);
+    state.heading[index] += steering * maxTurnRateRadS * dt;
 
     state.x[index] += Math.cos(state.heading[index]) * state.speed[index] * dt;
     state.y[index] += Math.sin(state.heading[index]) * state.speed[index] * dt;
