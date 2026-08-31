@@ -52,6 +52,8 @@ async function main() {
     protectedAsset,
     radarRangeM: scenario.sensors?.radarRangeM,
     radarPerShipClass: scenario.sensors?.perShipClass === true,
+    radarRangeScale: scenario.sensors?.radarScale,
+    episodeTimeLimitS: scenario.episodeTimeLimitS,
   });
   window.__debug = { three, world, focus, scene }; // devtools確認用フック
 

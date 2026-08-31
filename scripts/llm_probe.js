@@ -38,6 +38,18 @@
  *   --max-tokens N      既定 300
  *   --no-cold           コールドスタート計測（アンロード→初回）を省略
  *   --json PATH         生の計測結果を JSON で書き出す
+ *   --think on|off      thinking の明示制御。**--api ollama でのみ有効**（OpenAI 互換経路は
+ *                       think も chat_template_kwargs.enable_thinking も無視することを実測済み。
+ *                       docs/thinking-model-plan.md §2）。指定しなければモデル既定に任せる
+ *   --reasoning-effort low|medium|high
+ *                       推論の深さ（qwen3.8 系）。thinking 系モデルで
+ *                       「深く考えるほど良いのか」を掃引するための軸
+ *
+ * thinking を測るときに見るもの:
+ * - reasoning の文字数（トークン数は本文と合算でしか返らないので相対比較用）
+ * - **THINKING_OVERRUN**: reasoning は出たのに本文が空。latencyS 以前に
+ *   「そのモデルとその max_tokens では判断が成立しない」ことを意味する
+ * - finish_reason=length の件数（予算での打ち切り）
  */
 'use strict';
 
@@ -169,6 +181,10 @@ function parseArgs(argv) {
     maxTokens: 300,
     cold: true,
     json: null,
+    /** null=指定しない（モデル既定） / true / false。Ollama ネイティブの think に対応 */
+    think: null,
+    /** null=指定しない / 'low'|'medium'|'high'。qwen3.8 系の reasoning_effort */
+    reasoningEffort: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -184,11 +200,28 @@ function parseArgs(argv) {
     else if (arg === '--max-tokens') opts.maxTokens = Number(argv[++i]);
     else if (arg === '--no-cold') opts.cold = false;
     else if (arg === '--json') opts.json = argv[++i];
+    else if (arg === '--think') {
+      const raw = String(argv[++i]).toLowerCase();
+      if (raw !== 'on' && raw !== 'off') throw new Error('--think must be on|off');
+      opts.think = raw === 'on';
+    } else if (arg === '--reasoning-effort') opts.reasoningEffort = argv[++i];
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!opts.model) throw new Error('--model is required (e.g. --model qwen2.5:7b)');
   if (opts.api !== 'openai' && opts.api !== 'ollama') throw new Error('--api must be openai|ollama');
   if (!PROFILES[opts.profile]) throw new Error(`--profile must be ${Object.keys(PROFILES).join('|')}`);
+  if (opts.reasoningEffort != null && !['low', 'medium', 'high'].includes(opts.reasoningEffort)) {
+    throw new Error('--reasoning-effort must be low|medium|high');
+  }
+  // think の指定は Ollama ネイティブでしか効かない（OpenAI 互換経路では黙って無視される）。
+  // 黙って効かないまま「thinking を切って測った」ことにするのが一番まずいので、設定ミスとして落とす。
+  if (opts.think != null && opts.api !== 'ollama') {
+    throw new Error(
+      '--think requires --api ollama. OpenAI 互換経路 (/v1/chat/completions) は think も ' +
+        'chat_template_kwargs.enable_thinking も無視することを実測で確認済み ' +
+        '(docs/thinking-model-plan.md §2)。'
+    );
+  }
   if (!opts.url) opts.url = opts.api === 'ollama' ? DEFAULT_URL_OLLAMA : DEFAULT_URL_OPENAI;
   return opts;
 }
@@ -211,6 +244,7 @@ async function oneRequestOpenAI(opts, promptIndex) {
       temperature: 0.7,
       max_tokens: opts.maxTokens,
       stream: false,
+      ...(opts.reasoningEffort != null ? { reasoning_effort: opts.reasoningEffort } : {}),
       messages: [
         { role: 'system', content: profile.system },
         { role: 'user', content: profile.user(promptIndex) },
@@ -219,14 +253,18 @@ async function oneRequestOpenAI(opts, promptIndex) {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
   const json = await res.json();
+  const msg = json?.choices?.[0]?.message ?? {};
   return {
     latencyMs: Date.now() - startedAt,
     promptTokens: json?.usage?.prompt_tokens ?? null,
+    // OpenAI 互換の completion_tokens は reasoning と本文の合計。分離できないので合計として扱う
     outputTokens: json?.usage?.completion_tokens ?? null,
     loadMs: null,
     promptEvalMs: null,
     evalMs: null,
-    text: json?.choices?.[0]?.message?.content ?? '',
+    text: msg.content ?? '',
+    reasoning: msg.reasoning ?? msg.reasoning_content ?? '',
+    finishReason: json?.choices?.[0]?.finish_reason ?? null,
   };
 }
 
@@ -239,7 +277,13 @@ async function oneRequestOllama(opts, promptIndex) {
     body: JSON.stringify({
       model: opts.model,
       stream: false,
-      options: { temperature: 0.7, num_predict: opts.maxTokens },
+      // think は Ollama ネイティブのみが解釈する。null なら送らない（モデル既定に任せる）
+      ...(opts.think != null ? { think: opts.think } : {}),
+      options: {
+        temperature: 0.7,
+        num_predict: opts.maxTokens,
+        ...(opts.reasoningEffort != null ? { reasoning_effort: opts.reasoningEffort } : {}),
+      },
       messages: [
         { role: 'system', content: profile.system },
         { role: 'user', content: profile.user(promptIndex) },
@@ -257,6 +301,10 @@ async function oneRequestOllama(opts, promptIndex) {
     evalMs: json?.eval_duration != null ? json.eval_duration / NS_PER_MS : null,
     totalMs: json?.total_duration != null ? json.total_duration / NS_PER_MS : null,
     text: json?.message?.content ?? '',
+    // Ollama は thinking を本文と別フィールドで返す。合算されたトークン数しか無いので、
+    // 「reasoning がどれだけ予算を食ったか」は文字数で相対的に見るしかない
+    reasoning: json?.message?.thinking ?? '',
+    finishReason: json?.done_reason ?? null,
   };
 }
 
@@ -399,6 +447,14 @@ async function main() {
   const e2eTps = warm
     .filter((r) => r.outputTokens != null && r.latencyMs > 0)
     .map((r) => r.outputTokens / (r.latencyMs / 1000));
+  // thinking の実測。reasoning は本文と別フィールドで返るがトークン数は合算しか無いので、
+  // 予算をどれだけ食ったかは文字数で相対的に見る。
+  // 「reasoning は出たのに本文が空」は THINKING_OVERRUN（llm_http.js に足す失敗モードと同義）で、
+  // latencyS 以前に「そのモデルとその max_tokens ではそもそも判断が成立しない」ことを意味する。
+  const reasoningChars = warm.map((r) => (r.reasoning ?? '').length);
+  const thinkingSeen = reasoningChars.some((n) => n > 0);
+  const overruns = warm.filter((r) => (r.reasoning ?? '').length > 0 && String(r.text ?? '').trim() === '');
+  const lengthCapped = warm.filter((r) => r.finishReason === 'length');
   report.warm = {
     samples: warm,
     latencyMs: warmLat,
@@ -406,6 +462,13 @@ async function main() {
     promptTokens: warmPrompt,
     genTokensPerSec: stats(genTps),
     e2eTokensPerSec: stats(e2eTps),
+    thinking: {
+      requested: { think: opts.think, reasoningEffort: opts.reasoningEffort },
+      seen: thinkingSeen,
+      reasoningChars: stats(reasoningChars),
+      overrunCount: overruns.length,
+      lengthCappedCount: lengthCapped.length,
+    },
   };
 
   console.log(`\n--- warm steady state (concurrency=1, n=${warmLat.n}) ---`);
@@ -417,6 +480,29 @@ async function main() {
     `tokens   prompt mean ${warmPrompt?.mean?.toFixed(0) ?? 'n/a'} / ` +
       `output p50 ${warmOut?.p50 ?? 'n/a'} mean ${warmOut?.mean?.toFixed(1) ?? 'n/a'} max ${warmOut?.max ?? 'n/a'}`
   );
+  {
+    const t = report.warm.thinking;
+    const asked =
+      (t.requested.think == null ? 'think=(default)' : `think=${t.requested.think ? 'on' : 'off'}`) +
+      (t.requested.reasoningEffort != null ? ` effort=${t.requested.reasoningEffort}` : '');
+    if (t.seen) {
+      console.log(
+        `thinking ${asked} -> OBSERVED. reasoning chars p50 ${t.reasoningChars.p50.toFixed(0)} / ` +
+          `mean ${t.reasoningChars.mean.toFixed(0)} / max ${t.reasoningChars.max.toFixed(0)}`
+      );
+    } else {
+      console.log(`thinking ${asked} -> not observed (reasoning フィールドが常に空)`);
+    }
+    if (t.overrunCount > 0) {
+      console.log(
+        `  !! THINKING_OVERRUN ${t.overrunCount}/${warmLat.n}: reasoning は出たが本文が空。` +
+          `max_tokens=${opts.maxTokens} では判断が成立しない`
+      );
+    }
+    if (t.lengthCappedCount > 0) {
+      console.log(`  !! finish_reason=length ${t.lengthCappedCount}/${warmLat.n}: 予算で打ち切られている`);
+    }
+  }
   if (report.warm.genTokensPerSec) {
     console.log(
       `gen tok/s mean ${report.warm.genTokensPerSec.mean.toFixed(1)} ` +

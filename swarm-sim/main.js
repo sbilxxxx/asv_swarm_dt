@@ -153,6 +153,8 @@ async function main() {
     radarRangeM: scenario.sensors?.radarRangeM,
     // perShipClass=true のシナリオ（艦種3種入り）は艦種ごとの探知距離を使う。headless側と同じ条件。
     radarPerShipClass: scenario.sensors?.perShipClass === true,
+    radarRangeScale: scenario.sensors?.radarScale,
+    episodeTimeLimitS: scenario.episodeTimeLimitS,
   });
 
   for (const spawn of scenario.spawns) {

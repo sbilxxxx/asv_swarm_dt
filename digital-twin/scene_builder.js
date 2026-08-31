@@ -545,11 +545,15 @@ export function buildThreeScene(canvas, scene, options = {}) {
     waterNear.position.set(focusX, 0.02, -focusY);
   }
 
-  // 海岸線（ローカル座標 x,y）を Three.js の x,z 平面へ投影して押し出す
+  // 海岸線（ローカル座標 x,y）を Three.js の x,z 平面へ投影して押し出す。
+  // rotation.x=-90° は local(x,y,z) を world(x,z,-y) へ写す（下のland.rotation.x参照）ので、
+  // ここではyを反転せずそのまま渡す。反転して渡すと世界座標では -(-y)=+y に戻ってしまい、
+  // 船・水面（どちらもworldZ=-y、下のships/waterFar/waterNear参照）と南北が鏡写しにズレる
+  // （実測: flag_defence_squadrons シナリオで艦艇・防護対象が海でなく陸地メッシュ上に描画される不具合の原因だった）。
   const shape = new THREE.Shape();
   scene.coastline.forEach((p, i) => {
-    if (i === 0) shape.moveTo(p.x, -p.y);
-    else shape.lineTo(p.x, -p.y);
+    if (i === 0) shape.moveTo(p.x, p.y);
+    else shape.lineTo(p.x, p.y);
   });
   // 水面（y=0付近、波の振幅は約±1.4）と陸地が同一平面で重なるとZファイティングを起こすため、
   // 陸地の底面ははっきり下（-15）、頂面ははっきり上（+3）まで突き出す

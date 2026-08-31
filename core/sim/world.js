@@ -25,11 +25,16 @@ export class World {
    * @param {import('./sensors/sensor_base.js').SensorBase} [config.cameraSensor] - 未指定時はUnimplementedCameraSensor
    * @param {import('./environment/environment_base.js').EnvironmentBase} [config.environment]
    * @param {number} [config.radarRangeM] - レーダー探知距離。シナリオの sensors.radarRangeM から渡す
+   * @param {number} [config.radarRangeScale] - 探知距離全体の倍率（既定1）。シナリオの
+   *   sensors.radarScale から渡す。艦種間の比を保ったまま「レーダー / 戦場の広さ」を掃引する軸
    */
   constructor(config) {
     this.scene = config.scene;
     this.state = new EntityState(config.capacity ?? 32);
     this.clock = 0;
+    // シナリオの episodeTimeLimitS。未指定なら mission.js の既定値が使われる
+    // （参照は必ず mission.js の episodeTimeLimitOf() を通すこと）
+    this.episodeTimeLimitS = config.episodeTimeLimitS;
 
     this.platformInstances = new Map(); // entityId -> platform instance
     this.sensors = {
@@ -39,6 +44,7 @@ export class World {
       radar: new RadarSensor({
         ...(config.radarRangeM ? { rangeM: config.radarRangeM } : {}),
         ...(config.radarPerShipClass ? { perShipClass: true } : {}),
+        ...(config.radarRangeScale ? { rangeScale: config.radarRangeScale } : {}),
       }),
       camera: config.cameraSensor ?? new UnimplementedCameraSensor(),
     };

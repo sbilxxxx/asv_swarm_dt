@@ -42,8 +42,24 @@ export const INTERCEPT_RANGE_M = 60;
  * 「おおよその間合い」を1つの数で言うために残す。
  */
 export const ASSET_BREACH_RANGE_M = 80;
-/** エピソードの制限時間（シミュレーション秒） */
+/**
+ * エピソードの制限時間（シミュレーション秒）の**既定値**。
+ *
+ * 戦場を広げると移動に要する時間が伸びるため、この既定のままでは決着前に timeout する
+ * （重装艇 4 m/s で 2,200 m を渡ると 550 s 必要で、240 s では届かない）。
+ * シナリオが `episodeTimeLimitS` を持つ場合はそちらが優先される（`episodeTimeLimitOf`）。
+ */
 export const EPISODE_TIME_LIMIT_S = 240;
+
+/**
+ * この World に効いている制限時間。シナリオ側の上書きが無ければ既定値。
+ * プロンプト（指揮官・艇）と勝敗判定が同じ数を見るように、参照は必ずここを通す。
+ * @param {{episodeTimeLimitS?: number}} [world]
+ */
+export function episodeTimeLimitOf(world) {
+  const v = world?.episodeTimeLimitS;
+  return Number.isFinite(v) && v > 0 ? v : EPISODE_TIME_LIMIT_S;
+}
 
 /**
  * 1ステップ分の判定を行い、状態を更新する（相討ちになった双方の alive を落とす）。
@@ -145,7 +161,7 @@ export function evaluateMission(world) {
   if (armedLeft === 0) {
     return { done: true, reward, outcome: 'defended', events };
   }
-  if (world.clock >= EPISODE_TIME_LIMIT_S) {
+  if (world.clock >= episodeTimeLimitOf(world)) {
     // 時間切れは侵入を防ぎ切ったとまでは言えないが、突破もされていない
     return { done: true, reward, outcome: 'timeout', events };
   }

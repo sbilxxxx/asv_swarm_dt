@@ -16,7 +16,7 @@
  * 勝敗の距離は mission.js を唯一の出所とし、ここでは決してハードコードしない。
  */
 
-import { INTERCEPT_RANGE_M, ASSET_BREACH_RANGE_M, EPISODE_TIME_LIMIT_S } from '../mission.js';
+import { INTERCEPT_RANGE_M, ASSET_BREACH_RANGE_M, episodeTimeLimitOf } from '../mission.js';
 
 // 対外（LLM）向けの線表記は snake_case。core 内部の正規化済み表現は camelCase で、
 // その翻訳点は parse_orders.js ただ一箇所に置く。
@@ -126,6 +126,6 @@ export function renderPictureText(picture, { expectFaction = null } = {}) {
       );
     }
   }
-  lines.push(`TIME ${picture.t.toFixed(1)} / ${EPISODE_TIME_LIMIT_S} s`);
+  lines.push(`TIME ${picture.t.toFixed(1)} / ${picture.timeLimitS ?? episodeTimeLimitOf(null)} s`);
   return lines.join('\n');
 }

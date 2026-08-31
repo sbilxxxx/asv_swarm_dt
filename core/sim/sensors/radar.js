@@ -12,23 +12,33 @@ export const DEFAULT_RADAR_RANGE_M = 1500;
 
 export class RadarSensor extends SensorBase {
   /**
-   * @param {{rangeM?: number, perShipClass?: boolean}} [options]
+   * @param {{rangeM?: number, perShipClass?: boolean, rangeScale?: number}} [options]
    *   rangeM: 探知距離。運用領域より広い固定値のままだと全艇が全艇を常時捕捉し、
    *     部分観測（統合図の意味）が成立しない（docs/l0-llm-agent-plan.md Task 2）。
    *   perShipClass: true なら艇ごとに艦種の探知距離（ship_classes.js）を使い、rangeM は無視する。
    *     索敵艇が「遠くまで見える」ことが駒の個体差の一つなので、艦種入りシナリオではこちらを使う。
+   *   rangeScale: 探知距離全体にかける倍率（既定 1）。**艦種間の比を保ったまま**
+   *     「レーダー / 戦場の広さ」だけを動かすための軸。2026-08-31 の実測で、索敵艇 1200m に対し
+   *     戦場が約550m しかなく、指揮官の統合図が85回の采配すべてで敵を1隻も取りこぼしていなかった
+   *     （＝部分観測が成立していない）。この倍率はその比を掃引するために足した。
+   *     perShipClass=false の一律 rangeM にも同じ倍率がかかる。
    */
-  constructor({ rangeM = DEFAULT_RADAR_RANGE_M, perShipClass = false } = {}) {
+  constructor({ rangeM = DEFAULT_RADAR_RANGE_M, perShipClass = false, rangeScale = 1 } = {}) {
     super();
     this.rangeM = rangeM;
     this.perShipClass = perShipClass;
+    if (!Number.isFinite(rangeScale) || rangeScale <= 0) {
+      throw new TypeError(`RadarSensor: rangeScale must be a positive finite number, got ${rangeScale}`);
+    }
+    this.rangeScale = rangeScale;
   }
 
-  /** この艇の探知距離。perShipClass なら艦種から、そうでなければ一律 */
+  /** この艇の探知距離。perShipClass なら艦種から、そうでなければ一律。いずれも rangeScale 倍 */
   rangeFor(world, index) {
-    if (!this.perShipClass) return this.rangeM;
-    const cls = SHIP_CLASSES[world.state.shipClass[index]];
-    return cls ? cls.radarRangeM : this.rangeM;
+    const base = this.perShipClass
+      ? (SHIP_CLASSES[world.state.shipClass[index]]?.radarRangeM ?? this.rangeM)
+      : this.rangeM;
+    return base * this.rangeScale;
   }
 
   observe(world, entityId) {

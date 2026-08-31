@@ -236,21 +236,49 @@ function parseArgs(argv) {
 const RING_STEP_M = 150;
 
 /**
- * 合成された侵入艇を防護対象からこの距離まで押し出す。突破圏（80m）のすぐ外側に
+ * 合成された侵入艇を防護対象からこの距離まで押し出す下限。突破圏（80m）のすぐ外側に
  * 生まれると、攻防が始まる前に breached になる（--boats 30 が実際にそうなっていた）。
+ *
+ * ただしこの固定値だけでは足りない。**実際に使う値はシナリオ既存の侵入艇の最短距離**で、
+ * この定数はそれが取れなかった場合の保険である（下の effectiveClearance）。
+ * 固定 250m のままだと、盤面を広げた（既存の侵入艇が 550m や 1,100m から出る）ときに
+ * 合成艇だけがアセット至近から湧き、隻数を増やすほど侵入側が一方的に有利になる。
+ * 2026-08-31 の掃引で --boats 16 の防御側勝率が 0〜20% に張り付いたのはこれが原因。
  */
 const MIN_ASSET_CLEARANCE_M = 250;
 
 function synthesizeSpawns(baseSpawns, targetCount, { latLonToLocal, localToLatLon, protectedAssetLocal = null }) {
   if (targetCount <= baseSpawns.length) return baseSpawns.slice(0, targetCount);
   const spawns = baseSpawns.slice();
+  // 既存の侵入艇がアセットからどれだけ離れて出るかを基準にする。合成艇だけが内側に
+  // 湧くと隻数の比較が「開始位置の比較」に化けるので、既存艇より内側には出さない。
+  let effectiveClearance = MIN_ASSET_CLEARANCE_M;
+  if (protectedAssetLocal) {
+    const dists = baseSpawns
+      .filter((s) => s.faction === 'intruder')
+      .map((s) => {
+        const l = latLonToLocal(s.lat, s.lon);
+        return Math.hypot(l.x - protectedAssetLocal.x, l.y - protectedAssetLocal.y);
+      });
+    if (dists.length > 0) effectiveClearance = Math.max(effectiveClearance, Math.min(...dists));
+  }
   let n = 0;
   while (spawns.length < targetCount) {
-    const base = baseSpawns[n % baseSpawns.length];
-    const ring = Math.floor(n / baseSpawns.length) + 1;
+    // 陣営を交互に増やしつつ、**艦種はその陣営の既存艇から取る**。
+    // かつて base を陣営と無関係に baseSpawns から順に拾っていたため、艦種が陣営間でねじれ、
+    // 防御側に低速の重装艇（4 m/s）が、侵入側に高速の快速艇（9 m/s・爆破半径50mで旗を壊せる）が
+    // 偏って増えていた。2026-08-31 の掃引で --boats 16 の防御側勝率が 0〜17% に張り付いた真因。
+    // 同じ陣営の艇を複製すれば、戦力構成は両陣営で相似に伸びる。
+    const faction = n % 2 === 0 ? 'defender' : 'intruder';
+    const pool = baseSpawns.filter((s) => s.faction === faction);
+    if (pool.length === 0) {
+      throw new Error(`synthesizeSpawns: シナリオに ${faction} の spawn が無いので隻数を増やせない`);
+    }
+    const idx = Math.floor(n / 2);
+    const base = pool[idx % pool.length];
+    const ring = Math.floor(idx / pool.length) + 1;
     const angle = (2 * Math.PI * n) / targetCount;
     const radiusM = RING_STEP_M * ring;
-    const faction = n % 2 === 0 ? 'defender' : 'intruder';
     const baseLocal = latLonToLocal(base.lat, base.lon);
     let px = baseLocal.x + radiusM * Math.cos(angle);
     let py = baseLocal.y + radiusM * Math.sin(angle);
@@ -260,10 +288,10 @@ function synthesizeSpawns(baseSpawns, targetCount, { latLonToLocal, localToLatLo
       const dx = px - protectedAssetLocal.x;
       const dy = py - protectedAssetLocal.y;
       const d = Math.hypot(dx, dy);
-      if (d < MIN_ASSET_CLEARANCE_M) {
+      if (d < effectiveClearance) {
         const dir = d > 1e-9 ? { x: dx / d, y: dy / d } : { x: Math.cos(angle), y: Math.sin(angle) };
-        px = protectedAssetLocal.x + dir.x * MIN_ASSET_CLEARANCE_M;
-        py = protectedAssetLocal.y + dir.y * MIN_ASSET_CLEARANCE_M;
+        px = protectedAssetLocal.x + dir.x * effectiveClearance;
+        py = protectedAssetLocal.y + dir.y * effectiveClearance;
       }
     }
     const { lat, lon } = localToLatLon(px, py);
@@ -672,6 +700,8 @@ async function main() {
     protectedAsset,
     radarRangeM: scenario.sensors?.radarRangeM,
     radarPerShipClass: scenario.sensors?.perShipClass === true,
+    radarRangeScale: scenario.sensors?.radarScale,
+    episodeTimeLimitS: scenario.episodeTimeLimitS,
   });
   for (const s of spawns) {
     const { x, y } = scene.projection.latLonToLocal(s.lat, s.lon);
@@ -681,8 +711,10 @@ async function main() {
   }
 
   const env = new EnvApi(world); // dt既定0.1s
-  // EPISODE_TIME_LIMIT_S(240s)により全エピソードは必ずtimeoutでdoneになる。dt刻み数+余裕をハードリミットにする。
-  const maxSteps = Math.ceil(missionMod.EPISODE_TIME_LIMIT_S / env.dt) + 50;
+  // 制限時間により全エピソードは必ずtimeoutでdoneになる。dt刻み数+余裕をハードリミットにする。
+  // シナリオが episodeTimeLimitS で上書きしている場合は**そちら**を見ること。既定値で計算すると、
+  // 戦場を広げて制限時間を伸ばした盤面が判定に達する前にハードリミットで落ちる。
+  const maxSteps = Math.ceil(missionMod.episodeTimeLimitOf(world) / env.dt) + 50;
 
   // --- 指揮官とスケジューラ ---
   // 時間設定は1か所（opts）から作り、スケジューラ・プロンプト・発効時刻の検算がすべて同じ値を見る。

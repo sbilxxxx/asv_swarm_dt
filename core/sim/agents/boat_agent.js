@@ -27,7 +27,7 @@
 import { postChatCompletion, LlmHttpError, LLM_HTTP_FAILURES } from './llm_http.js';
 import { extractFirstJsonObject } from '../command/parse_orders.js';
 import { toCompassDeg } from '../command/fused_picture.js';
-import { INTERCEPT_RANGE_M, ASSET_BREACH_RANGE_M, EPISODE_TIME_LIMIT_S } from '../mission.js';
+import { INTERCEPT_RANGE_M, ASSET_BREACH_RANGE_M, episodeTimeLimitOf } from '../mission.js';
 import { describeOrder } from '../command/orders.js';
 
 const DEFAULT_TEMPERATURE = 0.7;
@@ -130,6 +130,7 @@ export function buildBoatPicture(world, boatId, { episode = null } = {}) {
     boatId,
     faction: world.state.faction[i],
     t: world.clock,
+    timeLimitS: episodeTimeLimitOf(world),
     episode,
     eastM: selfX - asset.x,
     northM: selfY - asset.y,
@@ -169,7 +170,7 @@ export function renderBoatPictureText(picture, { expectBoatId = null } = {}) {
       );
     }
   }
-  lines.push(`TIME ${picture.t.toFixed(1)} / ${EPISODE_TIME_LIMIT_S} s`);
+  lines.push(`TIME ${picture.t.toFixed(1)} / ${picture.timeLimitS ?? episodeTimeLimitOf(null)} s`);
   return lines.join('\n');
 }
 

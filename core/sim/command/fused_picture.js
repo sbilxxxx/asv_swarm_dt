@@ -18,6 +18,7 @@
  */
 
 import { describeOrder } from './orders.js';
+import { episodeTimeLimitOf } from '../mission.js';
 
 /** 数学規約（+x=東・CCW正・ラジアン）→ コンパス度（北0・時計回り・0〜359） */
 export function toCompassDeg(mathRad) {
@@ -68,5 +69,14 @@ export function buildFusedPicture(world, faction, { episode = null } = {}) {
 
   // asset は常に (0, 0)。全体がアセット基準なので自明だが、プロンプトの座標系を
   // 一目で示すためにデータ側にも置いておく。
-  return { faction, t: world.clock, episode, asset: { eastM: 0, northM: 0 }, ownForce, tracks };
+  return {
+    faction,
+    t: world.clock,
+    // 制限時間はプロンプトにも出るので、勝敗判定と同じ1つの出所（mission.js）から取る
+    timeLimitS: episodeTimeLimitOf(world),
+    episode,
+    asset: { eastM: 0, northM: 0 },
+    ownForce,
+    tracks,
+  };
 }

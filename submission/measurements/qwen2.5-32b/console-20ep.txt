@@ -627,3 +627,377 @@ episode 12/20: outcome=defended simTime=16.6s wallTime=19.820s steps=166 orders=
   t=10.0 def-runner-1: kept current orders (no usable decision)
   t=10.0 def-runner-2: kept current orders (no usable decision)
   t=10.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=13.0 blue-commander: 4 order(s) 「Continue intercepting respective targets」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset -51.2 deg)」
+  t=13.0 def-runner-1: 1 order(s) 「closer direct threat detected」
+  t=13.0 def-runner-2: 1 order(s) 「Closer intercept more effective」
+  t=13.0 def-scout: 1 order(s) 「closest to neutralisation range」
+  t=16.0 def-runner-1: 1 order(s) 「Closer target for neutralization」
+  t=16.0 def-runner-2: kept current orders (no usable decision)
+  t=16.0 def-scout: kept current orders (no usable decision)
+  t=19.0 def-runner-1: 1 order(s) 「closer to neutralize int-runner-1」
+  t=19.0 def-runner-2: 1 order(s) 「Closer target engagement」
+  t=19.0 def-scout: kept current orders (no usable decision)
+  t=22.0 def-runner-1: 1 order(s) 「Closer to neutralisation range」
+  t=22.0 def-runner-2: kept current orders (no usable decision)
+  t=22.0 def-scout: kept current orders (no usable decision)
+  t=23.0 blue-commander: 2 order(s) (+1 ignored) 「Intercept all threats to protect asset.」
+  t=23.0 red-commander: 2 order(s) (+1 ignored) 「advance on asset (approach offset -51.2 deg)」
+  t=25.0 def-runner-1: 1 order(s) 「Closer intercept for neutralization」
+  t=25.0 def-runner-2: kept current orders (no usable decision)
+  t=25.0 def-scout: kept current orders (no usable decision)
+  t=28.0 def-runner-1: 1 order(s) 「closer to intruder」
+  t=28.0 def-runner-2: kept current orders (no usable decision)
+  t=28.0 def-scout: kept current orders (no usable decision)
+  t=31.0 def-runner-1: 1 order(s) 「Closer target engagement」
+  t=31.0 def-runner-2: kept current orders (no usable decision)
+  t=31.0 def-scout: kept current orders (no usable decision)
+  t=33.0 blue-commander: 2 order(s) 「Intercept known threats, maintain asset protection」
+  t=33.0 red-commander: 2 order(s) 「advance on asset (approach offset -51.2 deg)」
+  t=34.0 def-runner-1: 1 order(s) 「Closer target for neutralization」
+  t=34.0 def-runner-2: kept current orders (no usable decision)
+  t=34.0 def-scout: kept current orders (no usable decision)
+  t=37.0 def-runner-1: 1 order(s) 「closer to neutralization」
+  t=37.0 def-runner-2: kept current orders (no usable decision)
+  t=37.0 def-scout: kept current orders (no usable decision)
+  t=40.0 def-runner-1: 1 order(s) 「Closer target for neutralization」
+  t=40.0 def-runner-2: kept current orders (no usable decision)
+  t=40.0 def-scout: kept current orders (no usable decision)
+  t=43.0 blue-commander: 2 order(s) 「Intercept fresh tracks, prioritize int-scout」
+  t=43.0 red-commander: 2 order(s) 「advance on asset (approach offset -51.2 deg)」
+  t=43.0 def-runner-1: 1 order(s) 「Closer to neutralisation range」
+  t=43.0 def-runner-2: kept current orders (no usable decision)
+  t=43.0 def-scout: kept current orders (no usable decision)
+  t=46.0 def-runner-1: 1 order(s) 「Closer intercept for neutralization」
+  t=46.0 def-runner-2: kept current orders (no usable decision)
+  t=46.0 def-scout: kept current orders (no usable decision)
+  t=49.0 def-runner-1: 1 order(s) 「closer target engagement」
+  t=49.0 def-runner-2: kept current orders (no usable decision)
+  t=49.0 def-scout: kept current orders (no usable decision)
+  t=52.0 def-runner-1: 1 order(s) 「closer target for neutralization」
+  t=52.0 def-runner-2: kept current orders (no usable decision)
+  t=52.0 def-scout: kept current orders (no usable decision)
+  t=53.0 blue-commander: 2 order(s) 「Intercept high threat targets to protect asset.」
+  t=53.0 red-commander: 2 order(s) 「advance on asset (approach offset -51.2 deg)」
+  t=55.0 def-runner-1: 1 order(s) 「closer target immediate threat」
+  t=55.0 def-runner-2: kept current orders (no usable decision)
+  t=55.0 def-scout: kept current orders (no usable decision)
+  t=58.0 def-runner-1: 1 order(s) 「closer to neutralization」
+  t=58.0 def-runner-2: kept current orders (no usable decision)
+  t=58.0 def-scout: kept current orders (no usable decision)
+  t=61.0 def-runner-1: 1 order(s) 「closer to neutralisation」
+  t=61.0 def-runner-2: kept current orders (no usable decision)
+  t=61.0 def-scout: kept current orders (no usable decision)
+  t=63.0 blue-commander: 2 order(s) 「Prioritize neutralizing int-scout and int-heavy」
+  t=63.0 red-commander: 2 order(s) 「advance on asset (approach offset -51.2 deg)」
+  t=64.0 def-runner-1: 1 order(s) 「Closer target immediate threat」
+  t=64.0 def-runner-2: kept current orders (no usable decision)
+  t=64.0 def-scout: kept current orders (no usable decision)
+  t=67.0 def-runner-1: 1 order(s) 「closer target imminent threat」
+  t=67.0 def-runner-2: kept current orders (no usable decision)
+  t=67.0 def-scout: kept current orders (no usable decision)
+  t=70.0 def-runner-1: 1 order(s) 「closer to neutralisation range」
+  t=70.0 def-runner-2: kept current orders (no usable decision)
+  t=70.0 def-scout: kept current orders (no usable decision)
+  t=73.0 blue-commander: 2 order(s) 「Intercept new threat, maintain coverage」
+  t=73.0 red-commander: 2 order(s) 「advance on asset (approach offset -51.2 deg)」
+  t=73.0 def-runner-1: 1 order(s) 「Closer target immediate threat」
+  t=73.0 def-runner-2: kept current orders (no usable decision)
+  t=73.0 def-scout: kept current orders (no usable decision)
+  t=76.0 def-runner-1: 1 order(s) 「Closer target priority」
+  t=76.0 def-runner-2: kept current orders (no usable decision)
+  t=76.0 def-scout: kept current orders (no usable decision)
+  t=79.0 def-runner-1: 1 order(s) 「Closer threat requires immediate action」
+  t=79.0 def-runner-2: kept current orders (no usable decision)
+  t=79.0 def-scout: kept current orders (no usable decision)
+episode 13/20: outcome=breached simTime=81.6s wallTime=65.737s steps=816 orders=47/102
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: kept current orders (no usable decision)
+  t=3.0 blue-commander: 4 order(s) 「Engage and neutralize all intruders before they reach asset.」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset 16.8 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: 1 order(s) 「closer intercept more effective」
+  t=4.0 def-scout: 1 order(s) 「closest to asset protection」
+  t=7.0 def-runner-1: 1 order(s) 「Closer intercept more efficient」
+  t=7.0 def-runner-2: kept current orders (no usable decision)
+  t=7.0 def-scout: 1 order(s) 「Closer intercept more effective」
+  t=10.0 def-runner-1: 1 order(s) 「closer intruder detected」
+  t=10.0 def-runner-2: kept current orders (no usable decision)
+  t=10.0 def-scout: kept current orders (no usable decision)
+  t=13.0 blue-commander: 4 order(s) 「Continue intercepting enemy vessels to protect asset.」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset 16.8 deg)」
+  t=13.0 def-runner-1: 1 order(s) 「Closer target for neutralisation」
+  t=13.0 def-runner-2: kept current orders (no usable decision)
+  t=13.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=16.0 def-runner-1: 0 order(s) (+1 ignored) 「Closer intercept more effective」
+  t=16.0 def-runner-2: 1 order(s) 「closer to neutralize this target」
+  t=16.0 def-scout: kept current orders (no usable decision)
+episode 14/20: outcome=defended simTime=17.4s wallTime=19.792s steps=174 orders=13/22
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: 1 order(s) 「closest intruder threat」
+  t=3.0 blue-commander: 4 order(s) 「Intercept all intruders before they reach asset」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset -25.2 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: kept current orders (no usable decision)
+  t=4.0 def-scout: 1 order(s) 「Closest to order target」
+  t=7.0 def-runner-1: 1 order(s) 「Closer intercept more efficient」
+  t=7.0 def-runner-2: 1 order(s) 「Closer intruder detected」
+  t=7.0 def-scout: 1 order(s) 「closest to asset」
+  t=10.0 def-runner-1: kept current orders (no usable decision)
+  t=10.0 def-runner-2: kept current orders (no usable decision)
+  t=10.0 def-scout: 1 order(s) 「Closer intercept needed」
+  t=13.0 blue-commander: 3 order(s) (+1 ignored) 「Continue intercepting enemy vessels to protect asset.」
+  t=13.0 red-commander: 3 order(s) (+1 ignored) 「advance on asset (approach offset -25.2 deg)」
+  t=13.0 def-runner-1: 1 order(s) 「closer intercept more efficient」
+  t=13.0 def-runner-2: kept current orders (no usable decision)
+  t=13.0 def-scout: 0 order(s) (+1 ignored) 「Closer interception needed」
+  t=16.0 def-runner-1: 1 order(s) 「Closest intruder to asset」
+  t=16.0 def-runner-2: 1 order(s) 「Closer target, immediate threat」
+  t=16.0 def-scout: kept current orders (no usable decision)
+  t=19.0 def-runner-1: 1 order(s) 「Closer intercept for neutralization」
+  t=19.0 def-runner-2: kept current orders (no usable decision)
+  t=19.0 def-scout: kept current orders (no usable decision)
+episode 15/20: outcome=defended simTime=19.5s wallTime=21.338s steps=195 orders=15/25
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: 1 order(s) 「closest intruder to asset」
+  t=3.0 blue-commander: 4 order(s) 「Intercept all intruders before they reach the asset.」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: kept current orders (no usable decision)
+  t=4.0 def-scout: 1 order(s) 「closest to asset」
+  t=7.0 def-runner-1: 1 order(s) 「defenders nearby, patrol for safety」
+  t=7.0 def-runner-2: 1 order(s) 「closer to intercept target」
+  t=7.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=10.0 def-runner-1: kept current orders (no usable decision)
+  t=10.0 def-runner-2: kept current orders (no usable decision)
+  t=10.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=13.0 blue-commander: 4 order(s) 「Intercept all intruders before they reach the asset」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=13.0 def-runner-1: kept current orders (no usable decision)
+  t=13.0 def-runner-2: kept current orders (no usable decision)
+  t=13.0 def-scout: 1 order(s) 「Closer intercept needed」
+  t=16.0 def-runner-1: 1 order(s) 「Closer intercept for neutralization」
+  t=16.0 def-runner-2: 1 order(s) 「closer target engagement」
+  t=16.0 def-scout: kept current orders (no usable decision)
+  t=19.0 def-runner-1: 1 order(s) 「closer target immediate threat」
+  t=19.0 def-runner-2: 1 order(s) 「Closer to neutralisation range」
+  t=19.0 def-scout: kept current orders (no usable decision)
+  t=22.0 def-runner-1: kept current orders (no usable decision)
+  t=22.0 def-runner-2: 1 order(s) 「closer to neutralization」
+  t=22.0 def-scout: kept current orders (no usable decision)
+  t=23.0 blue-commander: 2 order(s) 「Prioritize neutralizing int-scout and track int-heavy」
+  t=23.0 red-commander: 2 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=25.0 def-runner-1: kept current orders (no usable decision)
+  t=25.0 def-runner-2: 1 order(s) 「closer threat requires immediate action」
+  t=25.0 def-scout: kept current orders (no usable decision)
+  t=28.0 def-runner-1: kept current orders (no usable decision)
+  t=28.0 def-runner-2: 1 order(s) 「closer to intruder」
+  t=28.0 def-scout: kept current orders (no usable decision)
+  t=31.0 def-runner-1: kept current orders (no usable decision)
+  t=31.0 def-runner-2: 1 order(s) 「closer to intruder」
+  t=31.0 def-scout: kept current orders (no usable decision)
+  t=33.0 blue-commander: 2 order(s) 「Intercept high-priority threats to protect asset.」
+  t=33.0 red-commander: 2 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=34.0 def-runner-1: kept current orders (no usable decision)
+  t=34.0 def-runner-2: 1 order(s) 「closer threat requires immediate action」
+  t=34.0 def-scout: kept current orders (no usable decision)
+  t=37.0 def-runner-1: kept current orders (no usable decision)
+  t=37.0 def-runner-2: 1 order(s) 「Closer target engagement」
+  t=37.0 def-scout: kept current orders (no usable decision)
+  t=40.0 def-runner-1: kept current orders (no usable decision)
+  t=40.0 def-runner-2: 1 order(s) 「closer to neutralization」
+  t=40.0 def-scout: kept current orders (no usable decision)
+  t=43.0 blue-commander: 2 order(s) 「Prioritize neutralizing int-scout and int-heavy」
+  t=43.0 red-commander: 2 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=43.0 def-runner-1: kept current orders (no usable decision)
+  t=43.0 def-runner-2: 1 order(s) 「Closer to neutralization point」
+  t=43.0 def-scout: kept current orders (no usable decision)
+  t=46.0 def-runner-1: kept current orders (no usable decision)
+  t=46.0 def-runner-2: 1 order(s) 「closer to neutralize」
+  t=46.0 def-scout: kept current orders (no usable decision)
+  t=49.0 def-runner-1: kept current orders (no usable decision)
+  t=49.0 def-runner-2: 1 order(s) 「closer to neutralize intruder」
+  t=49.0 def-scout: kept current orders (no usable decision)
+  t=52.0 def-runner-1: kept current orders (no usable decision)
+  t=52.0 def-runner-2: 1 order(s) 「Closer to neutralisation range」
+  t=52.0 def-scout: kept current orders (no usable decision)
+  t=53.0 blue-commander: 2 order(s) 「Intercept high threat targets to protect asset.」
+  t=53.0 red-commander: 2 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=55.0 def-runner-1: kept current orders (no usable decision)
+  t=55.0 def-runner-2: 1 order(s) 「closer threat requires immediate action」
+  t=55.0 def-scout: kept current orders (no usable decision)
+  t=58.0 def-runner-1: kept current orders (no usable decision)
+  t=58.0 def-runner-2: 1 order(s) 「Closer to neutralization point」
+  t=58.0 def-scout: kept current orders (no usable decision)
+  t=61.0 def-runner-1: kept current orders (no usable decision)
+  t=61.0 def-runner-2: 1 order(s) 「closer to neutralisation」
+  t=61.0 def-scout: kept current orders (no usable decision)
+  t=63.0 blue-commander: 2 order(s) 「Intercept high threat targets to protect asset.」
+  t=63.0 red-commander: 2 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=64.0 def-runner-1: kept current orders (no usable decision)
+  t=64.0 def-runner-2: 1 order(s) 「closer threat to asset」
+  t=64.0 def-scout: kept current orders (no usable decision)
+  t=67.0 def-runner-1: kept current orders (no usable decision)
+  t=67.0 def-runner-2: 1 order(s) 「Closer to neutralisation point」
+  t=67.0 def-scout: kept current orders (no usable decision)
+  t=70.0 def-runner-1: kept current orders (no usable decision)
+  t=70.0 def-runner-2: 1 order(s) 「Closer target intervention needed」
+  t=70.0 def-scout: kept current orders (no usable decision)
+  t=73.0 blue-commander: 2 order(s) 「Prioritize intercepting high-threat targets」
+  t=73.0 red-commander: 2 order(s) 「advance on asset (approach offset 42.7 deg)」
+  t=73.0 def-runner-1: kept current orders (no usable decision)
+  t=73.0 def-runner-2: 1 order(s) 「Closer to neutralization range」
+  t=73.0 def-scout: kept current orders (no usable decision)
+episode 16/20: outcome=breached simTime=75.9s wallTime=62.013s steps=759 orders=45/94
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: kept current orders (no usable decision)
+  t=3.0 blue-commander: 4 order(s) 「Intercept all intruders to protect asset.」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset 0.7 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: 1 order(s) 「Closer intercept more effective」
+  t=4.0 def-scout: 1 order(s) 「Closer intercept more effective」
+  t=7.0 def-runner-1: 1 order(s) 「closer intruder detected」
+  t=7.0 def-runner-2: 1 order(s) 「closer intruder detected」
+  t=7.0 def-scout: kept current orders (no usable decision)
+  t=10.0 def-runner-1: kept current orders (no usable decision)
+  t=10.0 def-runner-2: 1 order(s) 「closest intruder to asset」
+  t=10.0 def-scout: 1 order(s) 「Closest to scout, intercepting.」
+  t=13.0 blue-commander: 4 order(s) 「Position boats to intercept, scout patrols asset area」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset 0.7 deg)」
+  t=13.0 def-runner-1: kept current orders (no usable decision)
+  t=13.0 def-runner-2: kept current orders (no usable decision)
+  t=13.0 def-scout: kept current orders (no usable decision)
+  t=16.0 def-runner-1: 1 order(s) 「Closer than 80m, neutralize」
+  t=16.0 def-runner-2: 1 order(s) 「Close intruder, neutralize priority」
+  t=16.0 def-scout: kept current orders (no usable decision)
+episode 17/20: outcome=defended simTime=16.2s wallTime=21.395s steps=162 orders=12/22
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: kept current orders (no usable decision)
+  t=3.0 blue-commander: 4 order(s) 「Engage and neutralize all intruders before they reach asset.」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset -41.3 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: kept current orders (no usable decision)
+  t=4.0 def-scout: 1 order(s) 「closest to asset威胁」
+  t=7.0 def-runner-1: kept current orders (no usable decision)
+  t=7.0 def-runner-2: 1 order(s) 「Closer intruder detected」
+  t=7.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=10.0 def-runner-1: kept current orders (no usable decision)
+  t=10.0 def-runner-2: 1 order(s) 「closest intruder to asset」
+  t=10.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=13.0 blue-commander: 4 order(s) 「Continue intercepting enemy to protect asset」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset -41.3 deg)」
+  t=13.0 def-runner-1: kept current orders (no usable decision)
+  t=13.0 def-runner-2: kept current orders (no usable decision)
+  t=13.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=16.0 def-runner-1: kept current orders (no usable decision)
+  t=16.0 def-runner-2: kept current orders (no usable decision)
+  t=16.0 def-scout: kept current orders (no usable decision)
+  t=19.0 def-runner-1: 1 order(s) 「Closer to neutralisation」
+  t=19.0 def-runner-2: 0 order(s) (+1 ignored) 「Closer target engagement」
+  t=19.0 def-scout: kept current orders (no usable decision)
+  t=22.0 def-runner-1: 1 order(s) 「closer to neutralization」
+  t=22.0 def-runner-2: kept current orders (no usable decision)
+  t=22.0 def-scout: kept current orders (no usable decision)
+  t=23.0 blue-commander: 2 order(s) 「Continue intercepting high-priority targets」
+  t=23.0 red-commander: 2 order(s) 「advance on asset (approach offset -41.3 deg)」
+  t=25.0 def-runner-1: 1 order(s) 「closer target neutralization」
+  t=25.0 def-runner-2: kept current orders (no usable decision)
+  t=25.0 def-scout: kept current orders (no usable decision)
+  t=28.0 def-runner-1: 1 order(s) 「closer to neutralisation」
+  t=28.0 def-runner-2: kept current orders (no usable decision)
+  t=28.0 def-scout: kept current orders (no usable decision)
+  t=31.0 def-runner-1: 1 order(s) 「closer target for neutralization」
+  t=31.0 def-runner-2: kept current orders (no usable decision)
+  t=31.0 def-scout: kept current orders (no usable decision)
+  t=33.0 blue-commander: 2 order(s) 「Prioritize intercepting int-scout and int-heavy.」
+  t=33.0 red-commander: 2 order(s) 「advance on asset (approach offset -41.3 deg)」
+  t=34.0 def-runner-1: 1 order(s) 「closer threat requires immediate action」
+  t=34.0 def-runner-2: kept current orders (no usable decision)
+  t=34.0 def-scout: kept current orders (no usable decision)
+episode 18/20: outcome=defended simTime=34.2s wallTime=31.328s steps=342 orders=21/44
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: kept current orders (no usable decision)
+  t=3.0 blue-commander: 4 order(s) 「Intercept all intruders before they reach the asset.」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset 26.7 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: kept current orders (no usable decision)
+  t=4.0 def-scout: kept current orders (no usable decision)
+  t=7.0 def-runner-1: 1 order(s) 「closer target intercept」
+  t=7.0 def-runner-2: 1 order(s) 「Closer intercept needed」
+  t=7.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=10.0 def-runner-1: kept current orders (no usable decision)
+  t=10.0 def-runner-2: kept current orders (no usable decision)
+  t=10.0 def-scout: 1 order(s) 「Closer intercept needed」
+  t=13.0 blue-commander: 4 order(s) 「Continue intercepting identified threats towards asset.」
+  t=13.0 red-commander: 4 order(s) 「advance on asset (approach offset 26.7 deg)」
+  t=13.0 def-runner-1: 1 order(s) 「Closer intercept for neutralization」
+  t=13.0 def-runner-2: 1 order(s) 「closest to asset threat」
+  t=13.0 def-scout: kept current orders (no usable decision)
+  t=16.0 def-runner-1: 1 order(s) 「Closer intercept for neutralization」
+  t=16.0 def-runner-2: 1 order(s) 「closer target engagement」
+  t=16.0 def-scout: 0 order(s) (+1 ignored) 「closer threat to asset」
+  t=19.0 def-runner-1: kept current orders (no usable decision)
+  t=19.0 def-runner-2: 1 order(s) 「Closer to neutralisation point」
+  t=19.0 def-scout: kept current orders (no usable decision)
+episode 19/20: outcome=defended simTime=19.7s wallTime=21.180s steps=197 orders=14/25
+  t=1.0 def-runner-1: kept current orders (no usable decision)
+  t=1.0 def-runner-2: kept current orders (no usable decision)
+  t=1.0 def-scout: 1 order(s) 「nearest intruder close to asset」
+  t=3.0 blue-commander: 4 order(s) 「Engage and neutralize all intruders before they reach the asset.」
+  t=3.0 red-commander: 4 order(s) 「advance on asset (approach offset -15.3 deg)」
+  t=4.0 def-runner-1: kept current orders (no usable decision)
+  t=4.0 def-runner-2: kept current orders (no usable decision)
+  t=4.0 def-scout: 1 order(s) 「closest to asset protection」
+  t=7.0 def-runner-1: 1 order(s) 「Closer response to威胁」
+  t=7.0 def-runner-2: 1 order(s) 「closer intruder detected」
+  t=7.0 def-scout: 1 order(s) 「Closest to intercept target」
+  t=10.0 def-runner-1: kept current orders (no usable decision)
+  t=10.0 def-runner-2: kept current orders (no usable decision)
+  t=10.0 def-scout: 1 order(s) 「closest to asset threat」
+  t=13.0 blue-commander: 3 order(s) (+1 ignored) 「Intercept all intruders before they reach asset」
+  t=13.0 red-commander: 3 order(s) (+1 ignored) 「advance on asset (approach offset -15.3 deg)」
+  t=13.0 def-runner-1: 1 order(s) 「Closer intercept int-runner-1」
+  t=13.0 def-runner-2: kept current orders (no usable decision)
+  t=13.0 def-scout: 0 order(s) (+1 ignored) 「Closer intercept needed」
+  t=16.0 def-runner-1: 1 order(s) 「Closer to neutralize intruder」
+  t=16.0 def-runner-2: 0 order(s) (+1 ignored) 「Closer target engagement」
+  t=16.0 def-scout: kept current orders (no usable decision)
+episode 20/20: outcome=defended simTime=17.8s wallTime=20.945s steps=178 orders=14/22
+---
+blue=llm red=scripted model=qwen2.5:32b temp=0.7 interval=10s latency=3s deadline=inf onMiss=keep-current boats=8 boatMode=llm×3(interval=3s,latency=1s) episodes=20
+outcomes: defended=13 breached=7 timeout=0 (defender win rate 65.0%)
+totalSteps=7741 totalWallTime=682.253s steps/s = 11.3 (per boat 1.4)
+commands: issued=974 applied=477 kept=473 missed=0 blocked=0 discarded=0 appliedOrders=757 ignoredOrders=40
+timing: applied exactly at t_issue+3s 477/477, kept released on the same tick 473/473 (max lag 1.7e-13s, dt=0.1s)
+---
+blue-commander (defender, llm): issued=85 applied=82 kept=0 missed=0 in-flight=3 appliedOrders=231 ignoredOrders=11
+blue-commander: measured wall (record only) stage=infer n=85 mean=3786.2ms max=6610.6ms (declared 3s — the declared value is what the sim uses)
+blue-commander: calls=85 ok=85 parseFailures=0 transportFailures=0 keptOrders=0 droppedOrders=0 onCallErrors=0
+blue-commander: meanLatency=3786ms meanOutputTokens=94.1 byOutcome={"ok":85,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+red-commander (intruder, scripted): issued=85 applied=82 kept=0 missed=0 in-flight=3 appliedOrders=231 ignoredOrders=11
+red-commander: measured wall (record only) stage=infer n=85 mean=0.4ms max=3.4ms (declared 3s — the declared value is what the sim uses)
+---
+def-runner-1 (defender, llm): issued=268 applied=109 kept=153 missed=0 in-flight=6 appliedOrders=106 ignoredOrders=3
+def-runner-1: measured wall (record only) stage=infer n=268 mean=1017.7ms max=2862.8ms (declared 3s — the declared value is what the sim uses)
+def-runner-1: calls=190 obeys=80 overrides=110 parseFailures=0 transportFailures=0 keptOrders=80 onCallErrors=0
+def-runner-1: meanLatency=1435ms meanOutputTokens=23.0 byOutcome={"override":110,"obey":80,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+def-runner-2 (defender, llm): issued=268 applied=122 kept=140 missed=0 in-flight=6 appliedOrders=118 ignoredOrders=4
+def-runner-2: measured wall (record only) stage=infer n=268 mean=1075.0ms max=2426.5ms (declared 3s — the declared value is what the sim uses)
+def-runner-2: calls=192 obeys=67 overrides=125 parseFailures=0 transportFailures=0 keptOrders=67 onCallErrors=0
+def-runner-2: meanLatency=1500ms meanOutputTokens=24.7 byOutcome={"override":125,"obey":67,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+def-scout (defender, llm): issued=268 applied=82 kept=180 missed=0 in-flight=6 appliedOrders=71 ignoredOrders=11
+def-scout: measured wall (record only) stage=infer n=268 mean=704.0ms max=3483.7ms (declared 3s — the declared value is what the sim uses)
+def-scout: calls=101 obeys=19 overrides=82 parseFailures=0 transportFailures=0 keptOrders=19 onCallErrors=0
+def-scout: meanLatency=1868ms meanOutputTokens=26.8 byOutcome={"override":82,"obey":19,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+log written to submission/measurements/qwen2.5-32b/qwen2.5-32b-20ep.jsonl (42462 rows)
+llm call log written to submission/measurements/qwen2.5-32b/qwen2.5-32b-20ep-calls.jsonl (568 rows)
+decision log written to submission/measurements/qwen2.5-32b/qwen2.5-32b-20ep-decisions.jsonl (974 rows)
