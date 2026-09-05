@@ -1,0 +1,36 @@
+warmup: qwen2.5:32b loaded in 12.9s
+---
+blue=llm red=scripted model=qwen2.5:32b temp=0.7 interval=10s latency=3s deadline=inf onMiss=keep-current boats=8 boatMode=llm×3(interval=3s,latency=1s) episodes=20
+outcomes: defended=13 breached=7 timeout=0 (defender win rate 65.0%)
+totalSteps=7609 totalWallTime=3302.690s steps/s = 2.3 (per boat 0.3)
+commands: issued=961 applied=160 kept=774 missed=0 blocked=0 discarded=0 appliedOrders=444 ignoredOrders=10
+timing: applied exactly at t_issue+3s 160/160, kept released on the same tick 774/774 (max lag 1.7e-13s, dt=0.1s)
+---
+blue-commander (defender, llm): issued=86 applied=80 kept=0 missed=0 in-flight=6 appliedOrders=222 ignoredOrders=5
+blue-commander: measured wall (record only) stage=infer n=86 mean=3866.7ms max=19227.0ms (declared 3s — the declared value is what the sim uses)
+blue-commander: calls=86 ok=86 parseFailures=0 transportFailures=0 keptOrders=0 droppedOrders=0 onCallErrors=0
+blue-commander: meanLatency=3866ms meanOutputTokens=90.5 byOutcome={"ok":86,"parse":0,"timeout":0,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"thinking_overrun":0,"unknown":0}
+---
+red-commander (intruder, scripted): issued=86 applied=80 kept=0 missed=0 in-flight=6 appliedOrders=222 ignoredOrders=5
+red-commander: measured wall (record only) stage=infer n=86 mean=0.5ms max=3.3ms (declared 3s — the declared value is what the sim uses)
+---
+def-runner-1 (defender, llm): issued=263 applied=0 kept=258 missed=0 in-flight=5 appliedOrders=0 ignoredOrders=0
+def-runner-1: measured wall (record only) stage=infer n=263 mean=7380.2ms max=120001.0ms (declared 3s — the declared value is what the sim uses)
+def-runner-1: calls=174 obeys=0 overrides=0 parseFailures=0 transportFailures=174 keptOrders=174 onCallErrors=0
+def-runner-1: meanLatency=11155ms meanOutputTokens=196.6 byOutcome={"override":0,"obey":0,"parse":0,"timeout":3,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"thinking_overrun":171,"unknown":0}
+WARNING: def-runner-1 failed (parse/transport) on 100.0% of cycles. Fix the prompt or the server before using these outcomes.
+---
+def-runner-2 (defender, llm): issued=263 applied=0 kept=258 missed=0 in-flight=5 appliedOrders=0 ignoredOrders=0
+def-runner-2: measured wall (record only) stage=infer n=263 mean=6572.6ms max=120003.6ms (declared 3s — the declared value is what the sim uses)
+def-runner-2: calls=156 obeys=0 overrides=0 parseFailures=0 transportFailures=156 keptOrders=156 onCallErrors=0
+def-runner-2: meanLatency=11081ms meanOutputTokens=198.7 byOutcome={"override":0,"obey":0,"parse":0,"timeout":1,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"thinking_overrun":155,"unknown":0}
+WARNING: def-runner-2 failed (parse/transport) on 100.0% of cycles. Fix the prompt or the server before using these outcomes.
+---
+def-scout (defender, llm): issued=263 applied=0 kept=258 missed=0 in-flight=5 appliedOrders=0 ignoredOrders=0
+def-scout: measured wall (record only) stage=infer n=263 mean=7999.4ms max=120004.5ms (declared 3s — the declared value is what the sim uses)
+def-scout: calls=105 obeys=0 overrides=0 parseFailures=0 transportFailures=105 keptOrders=105 onCallErrors=0
+def-scout: meanLatency=20036ms meanOutputTokens=182.9 byOutcome={"override":0,"obey":0,"parse":0,"timeout":9,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"thinking_overrun":96,"unknown":0}
+WARNING: def-scout failed (parse/transport) on 100.0% of cycles. Fix the prompt or the server before using these outcomes.
+log written to submission/measurements/scaleup/scale-f1-r0.5-20ep.jsonl (39794 rows)
+llm call log written to submission/measurements/scaleup/scale-f1-r0.5-20ep-calls.jsonl (521 rows)
+decision log written to submission/measurements/scaleup/scale-f1-r0.5-20ep-decisions.jsonl (961 rows)

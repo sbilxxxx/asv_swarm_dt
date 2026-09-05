@@ -7,7 +7,9 @@
     html, body { margin: 0; height: 100%; background: #06121a; color: #d7e6ea; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
     #app { position: relative; width: 100%; height: 100%; }
     #scene-canvas { display: block; width: 100%; height: 100%; }
-    #hud { position: absolute; top: 12px; left: 12px; display: flex; gap: 12px; }
+    /* align-items: flex-start が無いと、背の高いパネル（航行モードのHUD）に合わせて
+       Camera/Radar/GNSS が縦へ引き伸ばされる（実際に発生した） */
+    #hud { position: absolute; top: 12px; left: 12px; display: flex; gap: 12px; align-items: flex-start; }
     .panel { background: rgba(6, 18, 26, 0.85); border: 1px solid #23444f; border-radius: 4px; padding: 8px 10px; font-size: 12px; width: 180px; }
     .panel h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #6fb3c7; }
     #panel-camera { width: 220px; }
@@ -15,6 +17,17 @@
     #panel-radar { width: 168px; }
     #radar-readout { display: block; width: 100%; border-radius: 2px; background: #04140c; }
     #caption { position: absolute; bottom: 12px; left: 12px; font-size: 12px; color: #6fb3c7; }
+    /* 航行モード（?nav=）のパネル。既定では hidden で、nav_hud.js が外す。
+       #hud のフレックス列に並べると4枚目が画面中央まで伸びて船に重なるため、
+       右端へ絶対配置して逃がす（実機のスクリーンショットで船と重なっていた）。 */
+    #panel-nav { position: absolute; top: 12px; right: 12px; width: 216px; max-height: calc(100vh - 40px); overflow-y: auto; }
+    #panel-nav .nav-line { margin: 3px 0; line-height: 1.45; word-break: break-word; }
+    #panel-nav .nav-label { margin: 8px 0 3px; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: #6fb3c7; }
+    #panel-nav .nav-dim { color: #7a8f97; }
+    #panel-nav .nav-warn { color: #e0c46f; }
+    #panel-nav .nav-error { color: #e0708e; }
+    #panel-nav .nav-quote { border-left: 2px solid #23444f; padding-left: 6px; color: #cfe6ec; font-style: italic; }
+    #panel-nav #nav-plot, #panel-nav #nav-image { display: block; width: 100%; border-radius: 2px; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -25,11 +38,49 @@
       <div class="panel" id="panel-radar"><h3>Radar</h3><canvas id="radar-readout" width="160" height="160"></canvas></div>
       <div class="panel" id="panel-gnss"><h3>GNSS</h3><div id="gnss-readout">—</div></div>
     </div>
-    <div id="caption">海域デジタルツイン（センサー実証デモ） — デフォルトシナリオ: 東京湾（core/scenarios/tokyo_bay_minimal.json）</div>
+    <div class="panel" id="panel-nav" hidden></div>
+    <div id="caption">海域デジタルツイン（センサー実証デモ） — デフォルトシナリオ: 東京湾（core/scenarios/tokyo_bay_minimal.json）。<code>?nav=vlm</code> でVLM自動航行</div>
   </div>
 
   <script type="importmap">
     { "imports": { "three": "https://unpkg.com/three@0.165.0/build/three.module.js" } }
+  </script>
+
+  <!--
+    起動しなかったときに理由を画面へ出す。main.js の main().catch() では拾えない故障がある——
+    Three.js の importmap 解決が失敗すると **main() に入る前**にモジュールの読み込みが死ぬので、
+    catch は一度も走らず画面が白紙のまま何も出ない（2026-09-05 に、外部到達性の無いブラウザで
+    実際に再現した）。リモートで見ている人にとっては原因の切り分けが最も難しい故障なので、
+    ここだけは type="module" ではない素のスクリプトで見張る。
+  -->
+  <script>
+    (function () {
+      var BOOT_TIMEOUT_MS = 12000;
+      var failed = false;
+      function show(detail) {
+        if (failed) return;
+        failed = true;
+        var el = document.createElement('pre');
+        el.style.cssText =
+          'position:absolute;top:0;left:0;right:0;margin:0;padding:14px 16px;z-index:99;' +
+          'background:#200f16;color:#e0708e;font:12px/1.7 ui-monospace,Menlo,monospace;white-space:pre-wrap;';
+        el.textContent =
+          '起動しませんでした。\n\n' + detail + '\n\n' +
+          'よくある原因: このブラウザが unpkg.com へ到達できない（Three.js を importmap 経由の\n' +
+          'CDNから読んでいるため）。GPUクラスタ等のリモートで見ている場合は、サーバを\n' +
+          '  node scripts/serve_vlm.js --vendor-three\n' +
+           'で起動すると Three.js を同一オリジンから配ります。\n' +
+          '詳細は docs/remote-viewer-connectivity.md §6。';
+        document.body.appendChild(el);
+      }
+      window.addEventListener('error', function (e) {
+        // モジュールの解決・読み込みの失敗はここに来る（message だけで target を持たない場合もある）
+        if (!window.__debug) show('エラー: ' + (e.message || e.type));
+      });
+      setTimeout(function () {
+        if (!window.__debug) show('12秒待っても初期化されませんでした（window.__debug が未設定）。');
+      }, BOOT_TIMEOUT_MS);
+    })();
   </script>
   <script type="module" src="./main.js"></script>
 </body>

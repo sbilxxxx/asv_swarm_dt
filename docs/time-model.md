@@ -108,7 +108,26 @@ t_sim:   t_issue                                    t_apply = t_issue + latencyS
 
 **遅延モデルがかかるのは「LLMが絡む層」だけ**というのがこの境界線。現在は指揮官2体、Phase 2（艇レベルLLM）では艇も対象に加わるが、その場合も艇は「新しい decider」として同じ `DecisionScheduler` に登録されるだけで、`BoatController` 自体は変わらない（艇LLMは「指示を受諾/局所修正する層」として `BoatController` の上に乗る想定。計画書の「Phase 2への接続仕様」参照）。
 
-## 7. レンダリング時間の扱い（L1に向けて）
+## 7. レンダリング時間の扱い（L1・**実装済み**）
+
+> **更新 2026-09-05: この節は「将来」ではなくなった。** 単艦VLM航海士
+> （[`core/sim/navigator/`](../core/sim/navigator/)）が §12.5 のパイプライン宣言の
+> **最初の実使用者**として稼働している。宣言・実測・呼び出し箇所は次のとおり。
+>
+> | | 値 | 出所 |
+> |---|---:|---|
+> | `renderS`（宣言値） | 0.1 s | 2026-08-30 実測 84〜115 ms から人間が選んだ設定値 |
+> | `inferS`（宣言値） | 2.0 s | 同 推論 p50 1.78 s / max 2.91 s から選んだ設定値 |
+> | 合成後の `latencyS` | 2.1 s | `composeStages` による直列和（併記は設定ミスとして落ちる） |
+> | 実測 render（記録） | p50 265 ms（headless SW描画）／ 729〜1,119 ms（ブラウザ 1280×800） | 2026-09-05 |
+> | 実測 infer（記録） | p50 1,138 ms / max 1,802 ms（`qwen2.5vl:7b`・640×360） | 2026-09-05 |
+>
+> 宣言は [`digital-twin/nav_mode.js`](../digital-twin/nav_mode.js) の
+> `scheduler.register(boatId, { intervalS, stages: [{name:'render'},{name:'infer'}] })` 1箇所。
+> **実測値は HUD とログに出るが、宣言値へ書き戻す口はどこにも無い**（§2.5 I1）。
+> 実測が宣言値から離れていることは意図的で、宣言値は「人間が実測を見て選んだルール」である。
+> 回帰テストは `tests/navigator.test.js` の
+> `navigator declares [render, infer] stages and applies at t_issue + their sum`。
 
 指摘にあった「レンダリング時間」への回答。L0はテキストのみの観測なのでレンダリングは発生しないが、L1（VLM・カメラ画像入力）では次のようになる。
 

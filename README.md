@@ -115,6 +115,7 @@ python -m http.server 8000
 
 - `http://localhost:8000/digital-twin/` — 3D海域DT（センサー実証）
 - `http://localhost:8000/swarm-sim/` — 2Dバードビュー戦術マップ・攻防シム
+- `http://localhost:8000/replay-viewer/` — `headless_run.js`で記録済みのエピソードを2D／3D／指揮官・艇AIの判断ログの3画面で同期再生するビュアー（[`replay-viewer/`](replay-viewer/)）
 
 両者は現在ランタイムを接続していない（独立したシナリオ・独立した`core`インスタンス）。接続方式の設計は[`docs/system-design.md`](docs/system-design.md) §2.2を参照。
 
@@ -240,13 +241,112 @@ L1ではrenderステージを直列に足すだけで済む（[`docs/time-model.
 艇レベルの意思決定関数（`decideFn`、[`core/sim/agents/llm_agent.js`](core/sim/agents/llm_agent.js)）の
 デフォルトはAPIキー不要のルールベース関数のまま（ブラウザから直接クラウドAPIキーを扱わないための設計判断）。
 
+## 単艦VLM自動航行（L1・実装済み）
+
+**3D海域デジタルツインの中を、1隻のASVがVLMの判断で自動航行する。** ブリッジ一人称のカメラ画像・
+レーダー・GNSS・目的地・現行プランを入力に、VLMが航路（waypoint列）を `keep` / `replace` で
+監視・差し替えし、既存の追従制御（`boat_controller.js`）がそれを毎ステップ消化して船が動く。
+
+判断のロジックは [`core/sim/navigator/`](core/sim/navigator/) にあり、**ブラウザで見る経路と
+ヘッドレスで実験する経路が同じモジュールを使う**（画面の挙動と実験ログの数字が同じコードから出る）。
+
+| モジュール | 役割 |
+|---|---|
+| [`navigator_picture.js`](core/sim/navigator/navigator_picture.js) | 状況図（GNSS・レーダー・目的地・現行プラン・画像1枚）とプロンプト生成 |
+| [`parse_plan.js`](core/sim/navigator/parse_plan.js) | 応答のパースと**サニタイズ**（自船位置の混入・同一点の連続・領域外を落とし、落とした理由を数える） |
+| [`plan_follower.js`](core/sim/navigator/plan_follower.js) | 航路プランの保持と、毎ステップの `move_to` 指示への変換 |
+| [`vlm_navigator.js`](core/sim/navigator/vlm_navigator.js) | decider 本体。`DecisionScheduler` から見て指揮官・艇LLMと同型 |
+
+アームは3本: `vlm`（画像あり・主経路）/ `blind`（**同一プロンプトで画像だけ無し**＝統制群）/
+`scripted`（推論なし・目的地へ直行＝基準線。推論サーバ不要）。
+
+### ブラウザで見る
+
+`?nav=` を付けると3Dビューの中で自動航行が始まり、**VLMへ実際に送った画像・返ってきた `watch`・
+差し替えたwaypoint・サニタイズが落とした理由・航跡・挙動統計**がHUDに出る。
+
+```bash
+# 静的配信 ＋ 推論サーバへの同一オリジン中継（ブラウザに推論URLを埋めないため）
+node scripts/serve_vlm.js
+```
+
+- `http://localhost:8080/digital-twin/?scenario=pilotage_m3&nav=vlm&model=qwen2.5vl-7b-ctx3k` — VLM自動航行
+  （`pilotage_m3` は **spline 経路を走る交通船2隻**を航路上に置いたシナリオ。直行すると 9m まで寄る配置を
+  テストで担保している。`pilotage_m1` は同じ出発点・目的地で空海面の基準線）
+- `?nav=blind` — 統制群（同一プロンプトで画像だけ無し）／ `?nav=scripted` — 基準線（推論サーバ不要）
+- **VLM が置いた waypoint は3Dシーンの中に柱で立つ**（航路線・到達半径リング・航跡・交通船の経路も）。
+  俯瞰カメラ専用レイヤーに描くので、VLM への入力画像には写らない（自分の引いた線を見て判断する循環を防ぐ）
+- 俯瞰視点は**方位固定の第三者視点**が既定（`?cam=orbit` で従来の周回表示、`?plan3d=0` で3D表示を切る）
+- `?dest=east,north` で目的地を上書き、`?speed=3` で早送り、
+  `?interval=10&render=0.1&infer=2.0` で時間の宣言値を変える
+
+`?nav=` を付けなければ従来どおりのセンサー実証表示で、**サーバー不要の静的サイトのまま**である。
+
+### GPUクラスタで動かし、手元のブラウザで見る
+
+**接続方式の設計・手順・失敗モードは [`docs/remote-viewer-connectivity.md`](docs/remote-viewer-connectivity.md) が正典。**
+
+3Dの描画は**見ている側のブラウザ**で走るので、画面転送（VNC・X11・映像ストリーム）は要らない。
+クラスタの仕事は「静的ファイルを配る」と「推論を中継する」の2つだけで、
+**ポート転送1本で足りる**（帯域は判断1回あたり上り45〜52KB・下り0.5KB＝平均5〜15KB/s の実測）。
+
+```bash
+# クラスタ側（VS Code Remote-SSH の統合ターミナルで。端末を閉じても残すなら tmux で）
+node scripts/serve_vlm.js --vendor-three
+
+# VS Code なら右下の通知「ポート 8080 ... 使用可能です」→「ブラウザーで開く」で転送は自動。
+# 素の SSH なら手元でトンネルを1本:
+ssh -N -L 8080:127.0.0.1:8080 <user>@<cluster>
+#  → Mac のブラウザで http://localhost:8080/digital-twin/?scenario=pilotage_m3&nav=vlm&model=qwen2.5vl-7b-ctx3k
+```
+
+`serve_vlm.js` は**VS Code の統合ターミナルから起動されたことを検出して手順を出し分け**、
+上流のモデル一覧を取得して**thinking系VLMを名指しで警告する**（画像判断で本文が空になるため）。
+既定は `127.0.0.1` にしか bind しない——この中継は事実上「無認証のGPU推論API」なので、
+共有クラスタで素で公開しないための既定である（公開は `--host 0.0.0.0` を明示したときだけ）。
+
+**この環境では手元の Mac が `unpkg.com` へ到達できないことが確認されている**ので、
+`--vendor-three` を付ける。Three.js を同一オリジンから配るモードで、
+`replay-viewer/vendor/three.module.js`（既に同梱済み）を再利用し、無ければクラスタ側が取得する。
+**外部へのリクエスト0件で3Dが出ることを実測済み。** 配信するHTMLの importmap だけを
+書き換えるのでリポジトリのファイルは無変更＝GitHub Pages 配置は壊れない。
+付け忘れて白紙になった場合は、12秒後に原因と対処が画面に出る。
+
+### ヘッドレスで実験する
+
+```bash
+node scripts/vlm_navigator_run.js --arm vlm --model qwen2.5vl-7b-ctx3k     # 既定シナリオは pilotage_m3（交通船あり）
+node scripts/vlm_navigator_run.js --arm blind --model qwen2.5vl-7b-ctx3k   # 統制群
+node scripts/vlm_navigator_run.js --arm scripted                     # 推論サーバ不要
+node scripts/vlm_navigator_run.js --arm vlm --scenario pilotage_m1   # 空海面の基準線
+```
+
+`logs/vlm-nav-<日時>-<arm>/` に送信画像・`decisions.jsonl`（プロンプト・生応答・パース結果・
+落としたwaypointの理由・**宣言値と実測を別項目で**）・`summary.json`・`overview.png` が残る。
+初回は `cd .devtools && npx puppeteer browsers install chrome-headless-shell` が要る。
+
+### 時間の扱い
+
+この航海士が**複数ステージ宣言の最初の実使用者**である（[`docs/time-model.md`](docs/time-model.md) §12.5）。
+`stages: [{name:'render'}, {name:'infer'}]` を宣言し、発効は `t_issue + renderS + inferS` になる。
+HUDとログに出る実測 ms は**記録**であって、宣言値へ書き戻す口はどこにも無い。
+
+### モデル選定の注意（実測）
+
+thinking系のVLM（`qwen3-vl:8b` 等）は画像1枚の判断で推論に1,100〜1,600文字を費やし、
+`maxTokens` を1,400まで上げても本文が空のまま返る（`thinking_overrun`）。
+Ollama 0.33.2 では `think:false` を送ってもこのモデルのテンプレートでは thinking が止まらないことを実測した。
+**非thinkingのVLM（`qwen2.5vl:7b` / `qwen2.5vl:32b`）を使うこと。**
+失敗しても航路は維持され船は走り続けるので、エピソードは必ず終わる。
+
 ## 現在の実装状況
 
 - `core/`: データ取り込み（手書き海岸線1種、アダプターレジストリ配線済み）・シーン表現・ASV運動学（環境力の差し込み口`environment.sample()`配線済み）・GNSS/レーダー・攻防ミッション判定（`mission.js`）・ルールベースの意思決定（APIキー不要）・学習データ互換のper-agent JSONLログを実装
 - `core/sim/command/`: **指揮官階層**（陣営別の統合図`fused_picture.js`・プロンプト生成`commander_prompt.js`・出力パース`parse_orders.js`・LLM指揮官`llm_commander.js`・ルールベース指揮官`scripted_commanders.js`）と、**時間フレームワーク**（`decision_scheduler.js`: `t_issue → t_apply`・発行トークン・締切`deadlineS`・不成立`onMiss`）、**orders と艇の追従制御**（`orders.js` / `boat_controller.js`）を実装。HTTP経路は`core/sim/agents/llm_http.js`（OpenAI互換）
 - `digital-twin/`: Three.jsで海域3Dシーンを構築（多断面船体・環境マップ・ヒーロー艇追従影・海面LOD）、船体視点のカメラ画像・レーダー・GNSSをHUDに表示
 - `swarm-sim/`: Canvas 2Dで海岸線・ASVアイコン・航跡・防護対象・**指示のオーバーレイ**を描画し、スケジューラ駆動で攻防エピソード（迎撃・突破・時間切れ→自動リセット）を自律ループで実行。LLM指揮官の**推論待ち停止**と**不成立**を画面とログに表示する
-- `scripts/`: ヘッドレス実行ランナー（3アーム比較・判断サイクルの検証行つき）・推論サーバの単体計測ツール（`llm_probe.js`）
+- `core/sim/navigator/`: **単艦VLM航海士**（状況図`navigator_picture.js`・パースとサニタイズ`parse_plan.js`・航路プラン`plan_follower.js`・decider`vlm_navigator.js`）を実装。`llm_http.js` は画像入力（`images`）に対応（画像なしの body は従来とバイト同一）
+- `scripts/`: ヘッドレス実行ランナー（3アーム比較・判断サイクルの検証行つき）・推論サーバの単体計測ツール（`llm_probe.js`）・**単艦VLM閉ループの実験ランナー**（`vlm_navigator_run.js`）・**静的配信＋推論中継の開発サーバ**（`serve_vlm.js`）
 
 実測: [`docs/l0-experiment-log.md`](docs/l0-experiment-log.md)（指揮官アームの比較）・[`docs/llm-probe-measurements-2026-08-13.md`](docs/llm-probe-measurements-2026-08-13.md)（推論サーバの性能と`latencyS`の根拠）。
 

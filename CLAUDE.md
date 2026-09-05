@@ -17,6 +17,39 @@
 GPU 採択有無による分岐、意図的にやらないことを記載。個別の実装手順は各フェーズの計画書
 （現在は [`docs/l0-llm-agent-plan.md`](docs/l0-llm-agent-plan.md)）にある。
 
+**単艦VLM自動航行（L1）は [`core/sim/navigator/`](core/sim/navigator/) が実装の正典。**
+状況図・プロンプト・パース/サニタイズ・航路プランの4モジュールで、
+**ブラウザで見る経路（`digital-twin/?nav=vlm`・[`digital-twin/nav_mode.js`](digital-twin/nav_mode.js)）と
+ヘッドレスで測る経路（[`scripts/vlm_navigator_run.js`](scripts/vlm_navigator_run.js)）が同じモジュールを使う。**
+どちらか一方に判断ロジックを書き足さないこと（画面の挙動と実験ログの数字が別コードから出た瞬間、
+デモで良く見えたものが実験で再現しなくなる）。経緯・実測・残課題は
+[`docs/l1-vlm-navigator-implementation-2026-09-05.md`](docs/l1-vlm-navigator-implementation-2026-09-05.md)。
+**モデルは非thinkingのVLMを選ぶ**（thinking系は画像判断で本文が空になる。同ドキュメント §3.3）。
+
+**GPUクラスタで動かして手元のブラウザで見る方法は
+[`docs/remote-viewer-connectivity.md`](docs/remote-viewer-connectivity.md) が正典。**
+3Dの描画は見ている側のブラウザで走るので画面転送は不要で、SSHのローカルポート転送1本で足りる。
+[`scripts/serve_vlm.js`](scripts/serve_vlm.js) は**既定で 127.0.0.1 にしか bind しない**
+（この中継は事実上「無認証のGPU推論API」であり、共有クラスタで素で公開してはいけない）。
+公開したくなったら理由を同ドキュメント §8 と突き合わせること。
+
+**知覚〜航路計画のフロー（現状と理想・改修の順序）は
+[`docs/perception-to-waypoint-flow.md`](docs/perception-to-waypoint-flow.md) が正典。**
+現状は7段のうち「検知」と「対応づけ」の2段が無く、残りを1回の推論に押し込んでいる。
+その結果 VLM は危険を言語では正しく報告しながら**その座標をそのまま waypoint にする**
+（実測: 採用24点中6点）。改修は「VLMを賢く使う」ではなく**壊れている作業＝座標生成を取り上げる**方向。
+着手順は同 §4（**H0 の接触id匿名化が最優先**——`traffic-cross` という名前が答えを漏らしている）。
+
+**GPUメモリと `num_ctx` は [`docs/multi-vlm-gpu-budget.md`](docs/multi-vlm-gpu-budget.md) が正典。**
+Ollama は `num_ctx` で宣言した長さのKVキャッシュを**先に丸ごと確保する**ため、
+素の `qwen2.5vl:7b`（num_ctx=128,000）は重み約6GBに対して **85.9GB** を占有する（実測）。
+**モデルは `scripts/suggest_num_ctx.js` で実測して絞った派生モデルを使う**
+（例 `qwen2.5vl-7b-ctx3k` = 3,072）。`num_ctx` をコード側に書かないこと——
+値の出所はモデル1つだけにし、コードは `/api/show` から読んで実測 `prompt_tokens` と
+突き合わせるだけにする（[`core/sim/agents/context_budget.js`](core/sim/agents/context_budget.js)）。
+**小さすぎる `num_ctx` はエラーにならず黙ってプロンプトを切り捨てる**（画像が届かないまま答える）。
+このマシンのGPU分割の取り決めは `/tmp/GPU-USAGE-CONVENTION.md`（vlm=GPU0-3:11434 / sim=GPU4-7:11435）。
+
 **時間の扱いは [`docs/time-model.md`](docs/time-model.md) が正典。**
 推論を含む意思決定はシム時間上で瞬時ではない（t_issue → t_apply）。変数は「ルール（結果を決める設定値）」と
 「記録（実測ログ）」の2分類で、記録はルールに書き戻さない。複数処理パイプライン（レンダリング・推論・
@@ -35,6 +68,17 @@ GPU 採択有無による分岐、意図的にやらないことを記載。個�
 「動いてはいるが品質が足りない」箇所（頂点予算の83%を平坦な海面が占める、影が3.7m/テクセルで機能していない、等）と、
 その再設計案・優先順位・**意図的にやらないこと**を記載。同ドキュメントの§5に、
 3D品質と中身（攻防の成立・隻数・LLMエージェント実装）の優先順位判断も書いてある。
+
+## GPU 実行のルール
+
+**推論を伴う処理を走らせる前に、必ず `gpu-jobs` スキルを読む**（`~/.claude/skills/gpu-jobs/SKILL.md`）。
+このマシンはスケジューラが無く sudo も使えないため、GPU の割り当ては規律でしか守れない。要点:
+
+- GPU は `vlm`（0-3・:11434）と `sim`（4-7・:11435）に静的分割。**跨いで載せない**
+- **`num_ctx` は必ず実測で決める**（[`scripts/suggest_num_ctx.js`](scripts/suggest_num_ctx.js)）。
+  既定のまま載せると 7B のモデルでも 85GB を占有し、2026-09-05 に実験が CPU へ退避して7時間空回りした
+- **VRAM に載らないなら実行しない。** CPU 退避で粘ると、計測がハードウェア速度に支配されて無意味になる
+- 単発の疎通確認以外は `gpujob submit` でキューに積む（グループ内で推論を並走させない）
 
 ## 品質担保
 

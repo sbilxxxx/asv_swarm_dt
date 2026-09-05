@@ -1,0 +1,1 @@
+warmup: qwen2.5:32b loaded in 12.7s

@@ -25,8 +25,29 @@
  *   --url URL           既定 http://localhost:11434/v1
  *   --distances LIST    既定 100,200,300,400,600 （m）
  *   --classes LIST      既定 heavy,runner,scout
- *   --arms LIST         既定 wide,zoom
+ *   --arms LIST         既定 wide,zoom。第3のアーム autozoom は
+ *                       **レーダーが与える距離で画角を正規化する**（fov = zoomFov * refDist / range）。
+ *                       標的の見かけの大きさが距離によらず一定になるので、
+ *                       「見かけの大きさで判断している」モデルにとっては実寸の判定に変わる。
+ *                       真値は一切使わない（距離はレーダーが返す観測量）
+ *   --ref-dist M        autozoom の基準距離。既定 300（zoom アームで最も当たった距離）
  *   --aspect beam|bow   標的の姿勢。既定 beam（真横＝最も見分けやすい条件）
+ *   --transport openai|ollama
+ *                       openai  /v1/chat/completions（既定。vLLM とも共通）
+ *                       ollama  /api/chat（Ollama ネイティブ）。**thinking を think:false で切れる唯一の経路**
+ *                               （docs/thinking-model-plan.md §2 の実測D）。thinking 系 VLM で
+ *                               reasoning が予算を食い潰す（empty_content）場合に使う
+ *   --task class3|cargo2
+ *                       class3  艦種3値（scout/runner/heavy）を当てさせる。既定
+ *                       cargo2  **甲板に積荷があるか**の2値だけを訊く。任務上の意味は
+ *                               「武装しているか（blastRadiusM>0）」で、scout だけが非武装。
+ *                               相対比較（最小/中/最大）を含まないカテゴリ判定に問いを落とす切り分け。
+ *                               `--classes heavy,scout` と併せると 1:1 の均衡設計になる（チャンス50%）
+ *   --visual-variant as-is|bigcrate
+ *                       as-is    現行の見た目のまま
+ *                       bigcrate 積荷だけを拡大する（heavy x2.4 / runner x1.3 / scout は積荷なしのまま）。
+ *                                「艦種の差が絵の中で小さすぎるのか」を切り分けるための1変数だけの改変。
+ *                                色・形・船体サイズは触らない（変更は1回に1つ。L0 の教訓）
  *   --samples N         1条件あたりの推論回数。既定 3
  *   --res WxH           既定 640x360
  *   --zoom-fov DEG      zoom アームの垂直画角。既定 20
@@ -56,12 +77,16 @@ function parseArgs(argv) {
     distances: [100, 200, 300, 400, 600],
     classes: ['heavy', 'runner', 'scout'],
     arms: ['wide', 'zoom'],
+    refDistM: 300,
     aspect: 'beam',
     samples: 3,
     res: { w: 640, h: 360 },
     zoomFovDeg: 20,
     maxTokens: 200,
     timeoutMs: 60000,
+    visualVariant: 'as-is',
+    task: 'class3',
+    transport: 'openai',
     stageOnly: false,
     outDir: null,
     port: 8976,
@@ -76,8 +101,12 @@ function parseArgs(argv) {
     else if (a === '--aspect') o.aspect = argv[++i];
     else if (a === '--samples') o.samples = Number(argv[++i]);
     else if (a === '--zoom-fov') o.zoomFovDeg = Number(argv[++i]);
+    else if (a === '--ref-dist') o.refDistM = Number(argv[++i]);
     else if (a === '--max-tokens') o.maxTokens = Number(argv[++i]);
     else if (a === '--timeout-ms') o.timeoutMs = Number(argv[++i]);
+    else if (a === '--visual-variant') o.visualVariant = argv[++i];
+    else if (a === '--task') o.task = argv[++i];
+    else if (a === '--transport') o.transport = argv[++i];
     else if (a === '--stage-only') o.stageOnly = true;
     else if (a === '--out-dir') o.outDir = argv[++i];
     else if (a === '--port') o.port = Number(argv[++i]);
@@ -91,6 +120,9 @@ function parseArgs(argv) {
     } else throw new Error(`unknown option: ${a}`);
   }
   if (!['beam', 'bow'].includes(o.aspect)) throw new Error('--aspect は beam|bow');
+  if (!['as-is', 'bigcrate'].includes(o.visualVariant)) throw new Error('--visual-variant は as-is|bigcrate');
+  if (!['class3', 'cargo2'].includes(o.task)) throw new Error('--task は class3|cargo2');
+  if (!['openai', 'ollama'].includes(o.transport)) throw new Error('--transport は openai|ollama');
   for (const c of o.classes) if (!TARGET_BY_CLASS[c]) throw new Error(`未知の艦種: ${c}`);
   if (!o.outDir) {
     const d = new Date();
@@ -174,6 +206,29 @@ window.__idProbe = (() => {
     return { wPx: maxX - minX, hPx: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
   }
 
+  /**
+   * 見た目の変種を適用する。触るのは積荷（crateMat の色 0xb5501f で同定）の大きさだけ。
+   * scene_builder.js は無変更で、この probe の中だけの改変であることに注意。
+   */
+  function applyVisualVariant(variant) {
+    if (variant !== 'bigcrate') return;
+    for (let i = 0; i < world.state.count; i++) {
+      const id = world.state.id[i];
+      const cls = world.state.shipClass[i];
+      const g = groupOf(id);
+      if (!g) continue;
+      const k = cls === 'heavy' ? 2.4 : cls === 'runner' ? 1.3 : 1;
+      g.traverse((o) => {
+        if (!o.isMesh || !o.material || !o.material.color) return;
+        if (o.material.color.getHex() !== 0xb5501f) return;
+        if (o.userData.__variantApplied) return;
+        o.userData.__variantApplied = true;
+        o.scale.set(k, k, k);
+        o.position.y += 0.30 * (k - 1) * 2.2; // 拡大したぶんだけ甲板から持ち上げる（めり込み防止）
+      });
+    }
+  }
+
   function setPose(id, x, y, headingRad, speed) {
     const i = world.state.indexOf(id);
     if (i < 0) throw new Error('no such entity: ' + id);
@@ -189,7 +244,8 @@ window.__idProbe = (() => {
      * 観測艇はアセットの西 200m に置き、真東（heading 0）を向く＝外洋側を見る（北は海岸線）。
      * 標的は正面 distanceM の位置。aspect='beam' で真横（船首を北）、'bow' で正面（船首をこちらへ）。
      */
-    shot({ targetId, distanceM, aspect, fovDeg, w, h }) {
+    shot({ targetId, distanceM, aspect, fovDeg, w, h, visualVariant }) {
+      applyVisualVariant(visualVariant);
       const obsX = asset.x - 200, obsY = asset.y, obsHeading = 0; // +x = 東
       setPose(OBS, obsX, obsY, obsHeading, 3.0);
       const tx = obsX + Math.cos(obsHeading) * distanceM;
@@ -265,6 +321,25 @@ const ID_SYSTEM = [
   'Do not guess a type you cannot see evidence for.',
 ].join('\n');
 
+const CARGO_SYSTEM = [
+  'You are the lookout on an uncrewed surface vessel (ASV). You are shown the forward camera image.',
+  'One other vessel is visible ahead. Report ONLY whether it is carrying cargo on its deck:',
+  'a crate or container sitting on the open deck, forward of the superstructure.',
+  'Reply with ONLY one JSON object:',
+  '{"seen": "<one line: what you can actually make out of the vessel>",',
+  ' "cargo": "yes" | "no" | "unknown",',
+  ' "confidence": <0.0-1.0>}',
+  'Answer "unknown" when the vessel is too small or unclear to tell.',
+  'Do not guess.',
+].join('\n');
+
+function cargoUserPrompt(distanceM) {
+  return [
+    `Radar contact bearing dead ahead, range ${Math.round(distanceM)} m.`,
+    'Is the vessel carrying cargo on its deck?',
+  ].join('\n');
+}
+
 function idUserPrompt(distanceM) {
   return [
     `Radar contact bearing dead ahead, range ${Math.round(distanceM)} m.`,
@@ -272,7 +347,56 @@ function idUserPrompt(distanceM) {
   ].join('\n');
 }
 
-async function chat({ url, model, systemPrompt, userPrompt, imageDataUrl, maxTokens, timeoutMs }) {
+/**
+ * Ollama ネイティブ /api/chat。thinking を think:false で止められる唯一の経路。
+ * 応答は OpenAI 形と同じ {ok, text, promptTokens, outputTokens} へ正規化して返す
+ * （呼び出し側が経路を意識しない形＝thinking-model-plan.md §3 が llm_http.js へ入れる予定の形）。
+ */
+async function chatOllama({ url, model, systemPrompt, userPrompt, imageDataUrl, maxTokens, timeoutMs }) {
+  const base = url.replace(/\/+$/, '').replace(/\/v1$/, '');
+  const userMsg = { role: 'user', content: userPrompt };
+  if (imageDataUrl) userMsg.images = [String(imageDataUrl).split(',')[1]]; // ネイティブは data: 接頭辞なしの base64
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const t0 = Date.now();
+  try {
+    const res = await fetch(base + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        think: false,
+        messages: [{ role: 'system', content: systemPrompt }, userMsg],
+        options: { temperature: 0.2, num_predict: maxTokens },
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const snippet = (await res.text().catch(() => '')).slice(0, 200);
+      return { ok: false, kind: 'http_status', elapsedMs: Date.now() - t0, error: 'HTTP ' + res.status + ': ' + snippet };
+    }
+    const json = await res.json();
+    const text = json?.message?.content ?? '';
+    return {
+      ok: text.trim() !== '',
+      kind: text.trim() === '' ? 'empty_content' : null,
+      elapsedMs: Date.now() - t0,
+      text,
+      promptTokens: json?.prompt_eval_count ?? null,
+      outputTokens: json?.eval_count ?? null,
+    };
+  } catch (err) {
+    return { ok: false, kind: err?.name === 'AbortError' ? 'timeout' : 'connection', elapsedMs: Date.now() - t0, error: String(err?.message ?? err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function chat({ url, model, systemPrompt, userPrompt, imageDataUrl, maxTokens, timeoutMs, transport = 'openai' }) {
+  if (transport === 'ollama') {
+    return chatOllama({ url, model, systemPrompt, userPrompt, imageDataUrl, maxTokens, timeoutMs });
+  }
   const content = imageDataUrl
     ? [{ type: 'text', text: userPrompt }, { type: 'image_url', image_url: { url: imageDataUrl } }]
     : userPrompt;
@@ -356,13 +480,20 @@ async function main() {
 
   // --- 1. 配置と撮影（推論なしでも必ずここまでは行う。入力画像の健全性が先） ---
   for (const arm of opts.arms) {
-    const fovDeg = arm === 'zoom' ? opts.zoomFovDeg : 70;
     for (const cls of opts.classes) {
       for (const distanceM of opts.distances) {
+        // autozoom: 見かけの大きさが距離によらず一定になる画角。距離はレーダーの観測量であって
+        // 真値ではないので、これは truth の漏洩ではなく「レーダーで指向された目」の設計そのものである。
+        const fovDeg =
+          arm === 'zoom'
+            ? opts.zoomFovDeg
+            : arm === 'autozoom'
+              ? Math.max(2, Math.min(90, opts.zoomFovDeg * (opts.refDistM / distanceM)))
+              : 70;
         const targetId = TARGET_BY_CLASS[cls];
         const shot = await page.evaluate(
           (args) => window.__idProbe.shot(args),
-          { targetId, distanceM, aspect: opts.aspect, fovDeg, w: opts.res.w, h: opts.res.h }
+          { targetId, distanceM, aspect: opts.aspect, fovDeg, w: opts.res.w, h: opts.res.h, visualVariant: opts.visualVariant }
         );
         const name = `${arm}-${cls}-${distanceM}m.png`;
         writeDataUrlPng(shot.imageDataUrl, path.join(opts.outDir, 'images', name));
@@ -382,22 +513,27 @@ async function main() {
   // --- 2. 推論 ---
   if (!opts.stageOnly) {
     console.log(`\n[id-probe] warmup ${opts.model} ...`);
-    const warm = await chat({ url: opts.url, model: opts.model, systemPrompt: 'You are a helpful assistant.', userPrompt: 'Reply with OK.', maxTokens: 8, timeoutMs: opts.timeoutMs });
+    const warm = await chat({ url: opts.url, model: opts.model, systemPrompt: 'You are a helpful assistant.', userPrompt: 'Reply with OK.', maxTokens: 16, timeoutMs: opts.timeoutMs, transport: opts.transport });
     console.log(`  warmup ${warm.ok ? 'ok' : `FAILED (${warm.kind}: ${warm.error})`} ${warm.elapsedMs} ms`);
 
     for (const s of shots) {
       const imageDataUrl = 'data:image/png;base64,' + fs.readFileSync(path.join(opts.outDir, 'images', s.name)).toString('base64');
       for (let k = 0; k < opts.samples; k++) {
+        const cargo2 = opts.task === 'cargo2';
         const res = await chat({
           url: opts.url, model: opts.model,
-          systemPrompt: ID_SYSTEM, userPrompt: idUserPrompt(s.distanceM),
-          imageDataUrl, maxTokens: opts.maxTokens, timeoutMs: opts.timeoutMs,
+          systemPrompt: cargo2 ? CARGO_SYSTEM : ID_SYSTEM,
+          userPrompt: cargo2 ? cargoUserPrompt(s.distanceM) : idUserPrompt(s.distanceM),
+          imageDataUrl, maxTokens: opts.maxTokens, timeoutMs: opts.timeoutMs, transport: opts.transport,
         });
         const parsed = res.ok ? parseJsonLoose(res.text) : null;
-        const answer = parsed && typeof parsed.class === 'string' ? parsed.class.toLowerCase().trim() : null;
+        const field = cargo2 ? parsed?.cargo : parsed?.class;
+        const answer = typeof field === 'string' ? field.toLowerCase().trim() : null;
+        // cargo2 の真値は「武装しているか」。scout だけが blastRadiusM=0＝積荷なし
+        const truthLabel = cargo2 ? (s.cls === 'scout' ? 'no' : 'yes') : s.cls;
         const row = {
-          arm: s.arm, truth: s.cls, distanceM: s.distanceM, sample: k,
-          answer, correct: answer === s.cls, unknown: answer === 'unknown',
+          arm: s.arm, task: opts.task, truth: s.cls, truthLabel, distanceM: s.distanceM, sample: k,
+          answer, correct: answer === truthLabel, unknown: answer === 'unknown',
           confidence: parsed?.confidence ?? null, seen: parsed?.seen ?? null,
           targetPx: s.extent ? Number(s.extent.wPx.toFixed(1)) : null,
           latencyMs: res.elapsedMs, promptTokens: res.promptTokens ?? null,
@@ -407,7 +543,7 @@ async function main() {
         rows.push(row);
         fs.appendFileSync(path.join(opts.outDir, 'results.jsonl'), JSON.stringify(row) + '\n');
         console.log(
-          `  ${s.arm.padEnd(4)} ${s.cls.padEnd(6)} ${String(s.distanceM).padStart(4)}m #${k} -> ` +
+          `  ${s.arm.padEnd(8)} ${s.cls.padEnd(6)} ${String(s.distanceM).padStart(4)}m #${k} -> ` +
             `${String(answer ?? row.failure).padEnd(8)} ${row.correct ? 'OK ' : '   '} ${row.latencyMs} ms`
         );
       }
@@ -415,7 +551,7 @@ async function main() {
   }
 
   // --- 3. 集計 ---
-  const summary = { model: opts.model, aspect: opts.aspect, res: opts.res, zoomFovDeg: opts.zoomFovDeg, samples: opts.samples, shots, cells: [] };
+  const summary = { model: opts.model, task: opts.task, transport: opts.transport, aspect: opts.aspect, visualVariant: opts.visualVariant, res: opts.res, zoomFovDeg: opts.zoomFovDeg, samples: opts.samples, shots, cells: [] };
   for (const arm of opts.arms) {
     for (const distanceM of opts.distances) {
       const cell = rows.filter((r) => r.arm === arm && r.distanceM === distanceM);
@@ -433,11 +569,11 @@ async function main() {
   fs.writeFileSync(path.join(opts.outDir, 'summary.json'), JSON.stringify(summary, null, 2));
 
   if (summary.cells.length > 0) {
-    console.log('\n=== 正解率（艦種3種・チャンスレベル 33%） ===');
+    console.log(`\n=== 正解率（task=${opts.task}） ===`);
     console.log('arm   dist   px    correct   unknown');
     for (const c of summary.cells) {
       console.log(
-        `${c.arm.padEnd(5)} ${String(c.distanceM).padStart(4)}m ${String(c.targetPx ? c.targetPx.toFixed(0) : '-').padStart(4)} ` +
+        `${c.arm.padEnd(9)} ${String(c.distanceM).padStart(4)}m ${String(c.targetPx ? c.targetPx.toFixed(0) : '-').padStart(4)} ` +
           `  ${String(c.correct + '/' + c.n).padStart(6)}   ${String(c.unknown + '/' + c.n).padStart(6)}`
       );
     }

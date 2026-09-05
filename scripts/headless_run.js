@@ -676,7 +676,10 @@ function summarizeCycles(cycles) {
  * ウォームアップ無しだと最初の1判断だけ極端に遅い実測値が混ざり、レイテンシの平均が実態から外れる。
  * 失敗しても実行は続ける（サーバが落ちているなら、その事実は各判断の失敗として統計に出る）。
  */
-async function warmUpModel(postChatCompletion, { baseUrl, model, temperature, maxTokens }) {
+// transport を渡し忘れると、ネイティブ経路(:11435)へ OpenAI 互換のパスを叩いて 404 になる。
+// warmup は失敗しても続行する設計なので、この取り違えは「毎回404で警告が出るだけ」で
+// 静かに実験を汚す（モデルがロードされないまま本番の1回目がコールドスタートになる）。
+async function warmUpModel(postChatCompletion, { baseUrl, model, temperature, maxTokens, transport, thinking }) {
   const t0 = process.hrtime.bigint();
   try {
     await postChatCompletion({
@@ -684,6 +687,8 @@ async function warmUpModel(postChatCompletion, { baseUrl, model, temperature, ma
       model,
       temperature,
       ...(maxTokens ? { maxTokens } : {}),
+      ...(transport ? { transport } : {}),
+      ...(thinking ? { thinking } : {}),
       systemPrompt: 'You are a naval commander. Answer with one word.',
       userPrompt: 'Ready?',
     });
@@ -889,7 +894,20 @@ async function main() {
       model: opts.model,
       temperature: opts.temperature,
       maxTokens: opts.maxTokens,
+      transport: opts.transport,
+      thinking: opts.thinking,
     });
+    // 艇に別モデルを使う構成では、艇側もウォームアップしないと本番1回目がコールドになる
+    if (opts.boatMode === 'llm' && opts.boatModel && opts.boatModel !== opts.model) {
+      await warmUpModel(postChatCompletion, {
+        baseUrl: opts.llmUrl,
+        model: opts.boatModel,
+        temperature: opts.temperature,
+        maxTokens: opts.boatMaxTokens ?? opts.maxTokens,
+        transport: opts.transport,
+        thinking: opts.boatThinking ?? opts.thinking,
+      });
+    }
   }
 
   // --- 実行 ---

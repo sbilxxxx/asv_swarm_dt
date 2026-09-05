@@ -759,6 +759,8 @@ export function buildThreeScene(canvas, scene, options = {}) {
   // スウォーム全体の俯瞰は swarm-sim（2Dビュー）の役割。
   const orbitTarget = new THREE.Vector2(center.x, center.y);
   const focusEntityId = options.focusEntityId ?? null;
+  /** 主役艇の針路（rad）。追従視点が進行方向を向くために要る。updateShips が毎フレーム更新する */
+  let focusHeading = null;
 
   /**
    * 船の位置・姿勢を更新する。
@@ -799,6 +801,7 @@ export function buildThreeScene(canvas, scene, options = {}) {
     if (target) {
       // 急なカメラ移動を避けるため補間で寄せる
       orbitTarget.lerp(new THREE.Vector2(target.x, target.y), 0.08);
+      focusHeading = target.heading;
     }
     // 影のカメラ・近傍海面パッチも同じ注視点に追従させる
     // （影は400m四方、近傍海面は600m四方に絞った分、船から外れると消えてしまうため）
@@ -810,7 +813,65 @@ export function buildThreeScene(canvas, scene, options = {}) {
   // 主役艇が画面内で十分な大きさに見える距離。遠すぎると数ピクセルになり、
   // 近すぎると背景（湾・ランドマーク）が入らずデジタルツインらしさが伝わらない。
   const orbitRadius = 46;
+  /**
+   * カメラの挙動。
+   *   'chase' — **進行方向と同じ向きの第三者視点**（艇の真後ろ・斜め上）。艇が曲がれば一緒に向きを
+   *             変えるが、艇が直進している間は動かない。画面の「前」が常に艇の前になるので、
+   *             VLM が置いた waypoint が左舷側なのか右舷側なのかを画面のまま読める。航行モードの既定。
+   *   'north' — 方位をワールドに固定（常に同じ向きから見る）。針路が揺れても画面が動かないので、
+   *             航跡の形を見るのに向く。
+   *   'orbit' — 注視点のまわりを 0.12 rad/s で回り続ける（従来のデモ表示。GIF向け）
+   *
+   * 'chase' で艇の針路をそのまま使わず補間しているのは、追従制御が毎ステップ舵を切るため
+   * 針路が細かく振れており、生の値だとカメラが常時小刻みに揺れるため（実測で不快だった）。
+   */
+  const CAMERA_MODES = ['chase', 'north', 'orbit'];
+  let cameraMode = CAMERA_MODES.includes(options.cameraMode) ? options.cameraMode : 'orbit';
+  function setCameraMode(mode) {
+    cameraMode = CAMERA_MODES.includes(mode) ? mode : 'orbit';
+  }
+  /** 追従視点の配置: 艇の後方・上方・および注視点の前方オフセット（メートル） */
+  const CHASE_VIEW = { behind: 42, up: 16, lookAhead: 22 };
+  /** 方位固定視点のカメラ位置（注視点からのワールド固定オフセット）。南東の斜め上から見る */
+  const NORTH_VIEW = { east: 30, up: 17, south: 34 };
+  /** 補間した針路（rad）。針路の細かい振れをカメラへ伝えないための平滑化 */
+  let chaseHeading = null;
   function updateOverviewCamera(dt) {
+    if (cameraMode === 'chase') {
+      const targetHeading = focusHeading ?? 0;
+      if (chaseHeading === null) chaseHeading = targetHeading;
+      else {
+        // 角度は ±π で折り返すので、差を [-π, π] に畳んでから寄せる（畳まないと
+        // 針路が 179°→-179° を跨いだ瞬間にカメラが1周する）
+        let d = targetHeading - chaseHeading;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        chaseHeading += d * Math.min(1, dt * 1.5);
+      }
+      const cos = Math.cos(chaseHeading);
+      const sin = Math.sin(chaseHeading);
+      // 艇の後方 behind m・上方 up m。sim(x=東, y=北) → three(x=東, z=-北)
+      overviewCamera.position.set(
+        orbitTarget.x - cos * CHASE_VIEW.behind,
+        CHASE_VIEW.up,
+        -(orbitTarget.y - sin * CHASE_VIEW.behind)
+      );
+      // 艇そのものではなく少し前方を見る。艇を画面下寄りに置き、進む先を広く映すため
+      overviewCamera.lookAt(
+        orbitTarget.x + cos * CHASE_VIEW.lookAhead,
+        4,
+        -(orbitTarget.y + sin * CHASE_VIEW.lookAhead)
+      );
+      return;
+    }
+    if (cameraMode === 'north') {
+      overviewCamera.position.set(
+        orbitTarget.x + NORTH_VIEW.east,
+        NORTH_VIEW.up,
+        -orbitTarget.y + NORTH_VIEW.south
+      );
+      overviewCamera.lookAt(orbitTarget.x, 4, -orbitTarget.y);
+      return;
+    }
     orbitAngle += dt * 0.12;
     const radius = orbitRadius;
     overviewCamera.position.set(
@@ -838,6 +899,19 @@ export function buildThreeScene(canvas, scene, options = {}) {
     }
   }
 
+  /**
+   * 船の**実際に描画されている** Group を返す。
+   *
+   * カメラセンサー（camera_sensor.js）がブリッジの高さを決めるのに要る。
+   * updateShips は group.position.y に波高を足しているので、センサー側が
+   * EntityState の x/y から高さを再計算すると波のぶんだけ食い違い、
+   * 「船体に対してカメラが上下する」ことになる（実際に発生した）。
+   * 高さの出所を1つ（この Group）にすることでその食い違いを構造的に無くす。
+   */
+  function shipGroup(id) {
+    return ships.get(id)?.group ?? null;
+  }
+
   return {
     renderer,
     overviewCamera,
@@ -845,6 +919,9 @@ export function buildThreeScene(canvas, scene, options = {}) {
     scene3d,
     updateShips,
     updateOverviewCamera,
+    setCameraMode,
+    shipGroup,
+    waveHeightAt,
     render,
     resize,
     center,

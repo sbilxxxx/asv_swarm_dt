@@ -1,1 +1,33 @@
 warmup: qwen2.5:32b loaded in 18.1s
+---
+blue=llm red=scripted model=qwen2.5:32b temp=0.7 interval=10s latency=3s deadline=inf onMiss=keep-current boats=8 boatMode=llm×3(interval=3s,latency=1s) episodes=170
+outcomes: defended=110 breached=60 timeout=0 (defender win rate 64.7%)
+totalSteps=68142 totalWallTime=7966.511s steps/s = 8.6 (per boat 1.1)
+commands: issued=8565 applied=4200 kept=4159 missed=0 blocked=0 discarded=0 appliedOrders=6682 ignoredOrders=296
+timing: applied exactly at t_issue+3s 4200/4200, kept released on the same tick 4159/4159 (max lag 1.7e-13s, dt=0.1s)
+---
+blue-commander (defender, llm): issued=753 applied=705 kept=17 missed=0 in-flight=31 appliedOrders=2004 ignoredOrders=75
+blue-commander: measured wall (record only) stage=infer n=753 mean=4557.1ms max=30002.6ms (declared 3s — the declared value is what the sim uses)
+blue-commander: calls=753 ok=736 parseFailures=0 transportFailures=17 keptOrders=17 droppedOrders=0 onCallErrors=0
+blue-commander: meanLatency=4557ms meanOutputTokens=93.8 byOutcome={"ok":736,"parse":0,"timeout":17,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+red-commander (intruder, scripted): issued=753 applied=722 kept=0 missed=0 in-flight=31 appliedOrders=2050 ignoredOrders=76
+red-commander: measured wall (record only) stage=infer n=753 mean=0.3ms max=3.5ms (declared 3s — the declared value is what the sim uses)
+---
+def-runner-1 (defender, llm): issued=2353 applied=939 kept=1366 missed=0 in-flight=48 appliedOrders=904 ignoredOrders=35
+def-runner-1: measured wall (record only) stage=infer n=2353 mean=1401.8ms max=30003.1ms (declared 3s — the declared value is what the sim uses)
+def-runner-1: calls=1652 obeys=666 overrides=964 parseFailures=0 transportFailures=22 keptOrders=688 onCallErrors=0
+def-runner-1: meanLatency=1996ms meanOutputTokens=22.8 byOutcome={"override":964,"obey":666,"parse":0,"timeout":22,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+def-runner-2 (defender, llm): issued=2353 applied=1121 kept=1184 missed=0 in-flight=48 appliedOrders=1083 ignoredOrders=38
+def-runner-2: measured wall (record only) stage=infer n=2353 mean=1672.8ms max=30003.0ms (declared 3s — the declared value is what the sim uses)
+def-runner-2: calls=1724 obeys=542 overrides=1147 parseFailures=0 transportFailures=35 keptOrders=577 onCallErrors=0
+def-runner-2: meanLatency=2283ms meanOutputTokens=24.8 byOutcome={"override":1147,"obey":542,"parse":0,"timeout":35,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+---
+def-scout (defender, llm): issued=2353 applied=713 kept=1592 missed=0 in-flight=48 appliedOrders=641 ignoredOrders=72
+def-scout: measured wall (record only) stage=infer n=2353 mean=1052.3ms max=30002.1ms (declared 3s — the declared value is what the sim uses)
+def-scout: calls=898 obeys=165 overrides=713 parseFailures=0 transportFailures=20 keptOrders=185 onCallErrors=0
+def-scout: meanLatency=2757ms meanOutputTokens=26.5 byOutcome={"override":713,"obey":165,"parse":0,"timeout":20,"connection":0,"http_status":0,"malformed_body":0,"empty_content":0,"unknown":0}
+log written to submission/measurements/scaleup/qwen2.5-32b-170ep.jsonl (374868 rows)
+llm call log written to submission/measurements/scaleup/qwen2.5-32b-170ep-calls.jsonl (5027 rows)
+decision log written to submission/measurements/scaleup/qwen2.5-32b-170ep-decisions.jsonl (8565 rows)

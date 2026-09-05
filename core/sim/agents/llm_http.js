@@ -158,7 +158,7 @@ async function readBodySnippet(res) {
  *   jsonMode: true なら OpenAI 互換の `response_format:{type:"json_object"}` を付ける
  *     （agent-io-design.md §4 の⑤。Ollama/vLLM どちらも対応。プロンプトのスキーマ説明は
  *     引き続き要る——強制されるのは「構文として妥当な JSON」までで、キー名までは強制しない）。
- * @returns {Promise<{text:string, outputTokens:number|null, finishReason:string|null}>}
+ * @returns {Promise<{text:string, promptTokens:number|null, outputTokens:number|null, finishReason:string|null}>}
  * @throws {LlmHttpError} 通信・応答のあらゆる失敗（kind で分類済み）
  */
 export async function postChatCompletion({
@@ -297,6 +297,12 @@ export async function postChatCompletion({
     const outputTokens = isOllama
       ? (Number.isFinite(json?.eval_count) ? json.eval_count : null)
       : (Number.isFinite(json?.usage?.completion_tokens) ? json.usage.completion_tokens : null);
+    // 入力側のトークン数。num_ctx が足りているかの唯一の実測材料なので必ず返す
+    // （足りないと推論サーバは**エラーを返さずプロンプトを切り捨てる**。
+    //  判定は agents/context_budget.js の describeContextUsage が行う）。
+    const promptTokens = isOllama
+      ? (Number.isFinite(json?.prompt_eval_count) ? json.prompt_eval_count : null)
+      : (Number.isFinite(json?.usage?.prompt_tokens) ? json.usage.prompt_tokens : null);
 
     if (text.trim() === '') {
       // 実測の landmine（docs/llm-probe-measurements-2026-08-13.md）: gpt-oss:20b は
@@ -316,7 +322,7 @@ export async function postChatCompletion({
         { status, outputTokens }
       );
     }
-    return { text, outputTokens, finishReason };
+    return { text, promptTokens, outputTokens, finishReason };
   }
 
   // 締切レース。signal を無視する fetch 実装や、応答本体の読み出しが返らない場合でも

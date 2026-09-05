@@ -6,6 +6,16 @@
 > Phase 2（艇レベルエージェント）にもその先にも中身が入らない、という判断による。
 > 前提となる設計: [`system-design.md`](system-design.md)（§2.3 L1データフロー）・[`time-model.md`](time-model.md) v2.0
 > 教訓の出典: [`l0-experiment-log.md`](l0-experiment-log.md)（死んだwaypoint・プロンプトA/Bの悪化）
+>
+> **更新 2026-09-05: Task 2・5・6 は完了した。**
+> 結果と、それによる §8 の状態更新は
+> [`l1-vlm-navigator-implementation-2026-09-05.md`](l1-vlm-navigator-implementation-2026-09-05.md)。
+> 要点: 判断ロジックを `core/sim/navigator/` へ抽出（テスト7ケース）、`llm_http.js` を画像対応、
+> `DecisionScheduler` の `stages:[render, infer]` に接続、`digital-twin/?nav=vlm` で
+> **3Dの中を1隻がVLMで自動航行する様子をブラウザで見られる**ようになった。
+> 新しい実測2件: ①thinking系VLM（qwen3-vl）は画像判断で本文が空になり使えない
+> （Ollama 0.33.2 では `think:false` でも止まらない）②「順序逆転」の退化が再現した。
+> **M1 は成立。ただし §6 のとおり視覚の効果は M2（ブイ列）が無いと測れない——ここが次の一手。**
 
 ---
 
@@ -177,12 +187,12 @@ L0 で「設計だけ済み」だった**複数ステージ合成の最初の使
 
 | # | やること | 成果物 / 完了条件 |
 |---|---|---|
-| **1** | VLM本計測。`scripts/vlm_probe.js`（既存 `llm_probe.js` の画像版）: 実レンダ画像×解像度2水準（640×360 / 384×216）×ウォーム持続負荷、トークン数・レイテンシ分布 | `docs/vlm-probe-measurements-YYYY-MM-DD.md`。`renderS`/`inferS`/`intervalS` の宣言値が決まる |
-| **2** | `llm_http.js` に `images?: string[]`（data URL）対応。省略時は現行とバイト同一のbody（後方互換） | `tests/` にモックfetchのユニットテスト。既存テスト全PASS維持 |
-| **3** | シナリオとミッション: `core/scenarios/pilotage_m1..m3.json`（出発・目的地・visualObstacles・交通船。海域は差し替え対象の設定値）、単艦判定（到達/座礁/タイムアウト） | 3シナリオが headless で scripted 完走 |
+| **1** | ~~VLM本計測~~ → **完了（2026-08-30）**。`scripts/vlm_probe.js` ＋ 閉ループスモーク。宣言値は `renderS=0.1` / `inferS=2.0` / `intervalS=10` に決定 | [`l1-vlm-closed-loop-smoke-2026-08-30.md`](l1-vlm-closed-loop-smoke-2026-08-30.md) |
+| **2** | ~~`llm_http.js` に `images` 対応~~ → **完了（2026-09-05）**。省略時の body はバイト同一（テストで固定）。OpenAI互換は `content` 配列、Ollamaネイティブは `messages[].images` の生base64 | `tests/navigator.test.js`。既存テスト全PASS |
+| **3** | シナリオとミッション: `core/scenarios/pilotage_m1..m3.json`（**m1・m3 は 2026-09-05 に作成済み**——m3 は spline 経路の交通船2隻。`core/sim/spline_path.js` ＋ `core/sim/traffic.js`。**m2（カメラにしか映らないブイ列）は未着手**）（出発・目的地・visualObstacles・交通船。海域は差し替え対象の設定値）、単艦判定（到達/座礁/タイムアウト） | 3シナリオが headless で scripted 完走 |
 | **4** | 描画: `scene_builder.js` にブイ描画（review-findings の obstacles 未描画にも接続）、`camera_sensor.js` に固定解像度オフスクリーンキャプチャ | QA法（スクリーンショットPDCA）で目視確認 |
-| **5** | 航海士コア: `core/sim/navigator/{navigator_picture,parse_plan,vlm_navigator,plan_follower}.js`＋scripted/blind/vlm-watch アーム | fixture応答でネットワークなしテスト（フェンス剥がし・クランプ・自船位置混入の除去・keepフォールバック） |
-| **6** | `navigator/` ページ（静的サイト・既定は scripted でサーバ不要）: 3D表示＋プラン/目的地オーバーレイ＋**送信画像プレビュー＋VLM応答/統計HUD**＋クリックで目的地変更 | M1 をブラウザで完走。推論待ち停止・失敗表示 |
+| **5** | ~~航海士コア~~ → **完了（2026-09-05）**。`core/sim/navigator/{navigator_picture,parse_plan,vlm_navigator,plan_follower}.js` ＋ scripted/blind アーム（vlm-watch は未着手） | 完了。fixture応答でネットワークなしテスト7ケース |
+| **6** | ~~専用ページ~~ → **完了（2026-09-05）。ただし独立ページではなく `digital-twin/?nav=` として実装した**——DT の3D部品（scene_builder・camera_sensor）を輸入する新ページを作るより、既存ページにモードを1つ足すほうがコードの重複が無い。既定（`?nav=` 無し）はサーバー不要の静的サイトのまま。目的地のクリック変更は `setDestination` まで実装・UI未配線 | M1 をブラウザで完走。推論待ち停止・失敗表示・送信画像プレビュー・統計HUD すべて動作 |
 | **7** | 実験ランナー: Puppeteer（`.devtools` 既存）で `navigator/` をヘッドレス駆動、`calls/decisions/episodes` の JSONL | 1コマンドでNエピソード・ログが揃う |
 | **8** | 比較ラン: M2/M3 × 3アーム＋vlm-watch、§6 の挙動指標で記録。プロンプト/画像注釈のA/Bはここで1変更ずつ | `docs/l1-experiment-log.md`。roadmap/README/time-model §7 更新 |
 

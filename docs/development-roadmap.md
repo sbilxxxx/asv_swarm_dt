@@ -16,8 +16,29 @@
 | 区分 | 内容 |
 |---|---|
 | **実装・実測済み** | core の4層（データ取込・シーン表現・シミュレーション/センサー・env API）、攻防ミッション判定と3種の終了条件、学習データ互換 JSONL ログ、headless ランナー（3隻 108,600 steps/s・30隻 6,400 steps/s）、3D 海域DT のセンサー実証（カメラ・レーダーPPI・GNSS）、2D 攻防シムの自律ループ／**（L0 で追加）指揮官階層（陣営別の統合図→orders→追従制御）、時間フレームワーク（`DecisionScheduler`・発行トークン・締切 `deadlineS`・不成立 `onMiss`・ステージ別の実測記録）、LLM 指揮官と OpenAI 互換（Ollama）配線、統制群の scripted 指揮官、推論サーバの単体計測（`llm_probe`）、3アームの比較ラン** |
-| **設計だけ済み（コードなし）** | パイプライン宣言の複数ステージ合成（`[render] → [infer]`。単一ステージのみ実装・使用）、`latencyModel` の分布化（`constant` のみ実装・使用）、`missArbiter: 'wallclock'` |
-| **未着手** | 艇レベル LLM（Phase 2）、VLM 接続（L1）、パラメータスイープ（L2）、戦術学習（L3）、AIS/ドローンの動的取込経路（B-2） |
+| **設計だけ済み（コードなし）** | `latencyModel` の分布化（`constant` のみ実装・使用）、`missArbiter: 'wallclock'` |
+| **未着手** | パラメータスイープ（L2）、戦術学習（L3）、AIS/ドローンの動的取込経路（B-2） |
+
+> 更新: 2026-09-05（L1 単艦VLM航行の実装時）
+>
+> - **VLM 接続（L1）は「未着手」ではなくなった。** 単艦VLM航海士が `core/sim/navigator/` にあり、
+>   `digital-twin/?nav=vlm` でブラウザの3D上を1隻が自動航行し、`scripts/vlm_navigator_run.js` で
+>   ヘッドレス実験も回る。`llm_http.js` は画像入力に対応済み。
+>   詳細は [`l1-vlm-navigator-implementation-2026-09-05.md`](l1-vlm-navigator-implementation-2026-09-05.md)。
+>   **ただし「視覚が効いている」ことは未証明**——空海面のシナリオでは `vlm` と `blind` の差が
+>   原理的に出ないため、カメラにしか映らない障害物を置く M2 が要る。
+> - **パイプライン宣言の複数ステージ合成は「設計だけ」ではなくなった**（航海士が最初の実使用者。
+>   [`time-model.md`](time-model.md) §7）。
+> - 艇レベル LLM（Phase 2）も 2026-08-30 に実装・20ep 実測済み（`core/sim/agents/boat_agent.js`）。
+>
+> **将来 TODO（2026-09-06 追加）**
+>
+> | # | やること | 前提・メモ |
+> |---|---|---|
+> | T-1 | **マルチVLMエージェント試験** — 複数の艇に同時に VLM を持たせて走らせる | 収容設計は [`multi-vlm-gpu-budget.md`](multi-vlm-gpu-budget.md) に整理済み（`num_ctx` を絞れば32B×8スロットが2基で収まる）。**単艦の航路計画が成立してから**——現状 VLM は危険を報告しても回避を計画できていない（[`perception-to-waypoint-flow.md`](perception-to-waypoint-flow.md)）ので、それを N 体並べても壊れ方が N 倍になるだけである。32B VLM の実測も未取得 |
+> | T-2 | 知覚〜計画のフロー改修 H0〜H6 | [`perception-to-waypoint-flow.md`](perception-to-waypoint-flow.md) §4。**H0（接触idの匿名化）が最優先**——`traffic-cross` という名前が答えを漏らしており、直さないと以降の測定を信用できない |
+> | T-3 | M2 シナリオ（カメラにしか映らないブイ列） | 「視覚が効いた」を言うために必要。M3（交通船）はレーダーにも映るので分離できない |
+> | T-4 | ブリッジカメラの搭載位置 | 送信画像の下3〜4割が自艇の積荷。移設は VLM 入力が変わるので単独の変更として扱う |
 
 レビュー指摘 B-7「LLM/VLM/VLA のコードが1行も無い」は**対応済**（指揮官レベルまで。1,893行。実測は [`l0-experiment-log.md`](l0-experiment-log.md)）。
 ただし GPU 申請の本命である VLM（L1）と、ハッカソンの主題である艇レベル LLM（Phase 2）はまだコードが無い。**穴は「推論が1行も無い」から「主題の推論がまだ無い」へ移った。**
