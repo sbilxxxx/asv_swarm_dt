@@ -55,6 +55,8 @@ export const COMMANDER_OUTCOMES = Object.freeze({
   HTTP_STATUS: LLM_HTTP_FAILURES.HTTP_STATUS,
   MALFORMED_BODY: LLM_HTTP_FAILURES.MALFORMED_BODY,
   EMPTY_CONTENT: LLM_HTTP_FAILURES.EMPTY_CONTENT,
+  /** thinking が予算を使い切って本文が空。EMPTY_CONTENT と分けると原因の所在が判別できる */
+  THINKING_OVERRUN: LLM_HTTP_FAILURES.THINKING_OVERRUN,
   /** llm_http が名前を付け損ねた想定外の例外。0 でないなら HTTP 層のバグ */
   UNKNOWN: 'unknown',
 });
@@ -75,6 +77,9 @@ export function createLlmCommanderFn(options) {
     temperature = DEFAULT_TEMPERATURE,
     maxTokens = DEFAULT_MAX_TOKENS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    transport,
+    thinking,
+    reasoningEffort,
     fetchImpl = undefined, // 既定は llm_http 側（globalThis.fetch を包んだもの）に任せる
     onCall = null,
     jsonMode = true, // agent-io-design.md §4 の⑤（JSON強制）。既定でオン
@@ -123,6 +128,9 @@ export function createLlmCommanderFn(options) {
         temperature,
         maxTokens,
         timeoutMs,
+        ...(transport ? { transport } : {}),
+        ...(thinking ? { thinking } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         fetchImpl,
         systemPrompt,
         userPrompt,

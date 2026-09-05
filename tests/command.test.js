@@ -1024,14 +1024,28 @@ async function testLlmHttpFailsInNamedBoundedWays() {
   assert.strictEqual(malformed.kind, LLM_HTTP_FAILURES.MALFORMED_BODY);
 
   // thinking 系モデルの landmine: 200 で返るが content は空。max_tokens を推論が食い切っている。
-  const empty = await kindOf({
+  // reasoning が付いているかどうかで別の名前を付ける——直し方が違うため（本モジュールの契約2）。
+  //   reasoning あり → THINKING_OVERRUN（maxTokens を上げる / thinking を切る / 非 thinking モデル）
+  //   reasoning なし → EMPTY_CONTENT   （モデルが単に空を返した。プロンプト側を疑う）
+  const overrun = await kindOf({
     fetchImpl: fakeFetch(() =>
       jsonResponse('', { finishReason: 'length', completionTokens: 300, extraMessage: { reasoning: 'thinking...' } })
     ),
   });
+  assert.strictEqual(overrun.kind, LLM_HTTP_FAILURES.THINKING_OVERRUN);
+  assert.ok(/length/.test(overrun.message), 'the finish reason is reported so the cause is visible');
+  assert.ok(/maxTokens|max_tokens/.test(overrun.message), `the fix is named in the message: ${overrun.message}`);
+  assert.ok(/thinking/.test(overrun.message), 'thinking is named as the cause');
+
+  const empty = await kindOf({
+    fetchImpl: fakeFetch(() => jsonResponse('', { finishReason: 'length', completionTokens: 300 })),
+  });
   assert.strictEqual(empty.kind, LLM_HTTP_FAILURES.EMPTY_CONTENT);
-  assert.ok(/length/.test(empty.message), 'the finish reason is reported so the cause is visible');
-  assert.ok(/maxTokens|max_tokens/.test(empty.message), `the fix is named in the message: ${empty.message}`);
+  assert.notStrictEqual(
+    empty.kind,
+    overrun.kind,
+    'reasoning の有無で失敗の名前が分かれる（原因の所在が判別できる）'
+  );
 
   // タイムアウトは (1) 有界であること (2) signal で相手にも中断を伝えること の両方
   let seenInit = null;

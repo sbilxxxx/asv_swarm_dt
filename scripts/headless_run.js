@@ -78,6 +78,16 @@ const HELP_TEXT = `node scripts/headless_run.js [options]
                         シナリオに無い id は警告して無視）を指揮官と同じスケジューラに register する
   --boat-interval S     艇の発行間隔（既定 3 シム秒。decision-architecture.md §1）
   --boat-latency S      艇の指示の発効遅延（既定 1 シム秒）
+  --boat-model NAME     艇だけ別モデル（既定 --model と同じ）。呼び出しが多い艇を軽量モデルにし、
+                        指揮官にだけ大きい/thinking モデルを割り当てる用（thinking-model-plan.md §3.5）
+  --boat-max-tokens N   艇だけ別の上限トークン（既定 --max-tokens と同じ）
+  --llm-transport T     openai（既定・vLLM/Ollama 共通の /chat/completions）| ollama（/api/chat）。
+                        **Ollama で thinking を切るには ollama が必須**（/v1 は think を無視する）
+  --thinking MODE       auto（既定・モデル任せ）| on | off。指揮官に適用
+  --boat-thinking MODE  艇だけ別指定（既定 --thinking と同じ）
+  --reasoning-effort E  low|medium|high（qwen3.8 等）。指揮官に適用
+  --boat-reasoning-effort E  艇だけ別指定
+  --timeout-ms N        1呼び出しの締切（既定 30000）。大規模モデル・4並列では要調整
   --out path            env.logger の JSONL を書き出す
   --llm-log path        LLM 指揮官・艇の全呼び出し（プロンプト・生応答・失敗）を JSONL で書き出す
   --decision-log path   全判断サイクル（発行/発効時刻・ステージ別実測 t_wall）を JSONL で書き出す
@@ -131,6 +141,17 @@ function parseArgs(argv) {
     boatMode: 'scripted',
     boatIntervalS: 3,
     boatLatencyS: 1,
+    // 指揮官と艇で別々に持てる設定。未指定なら指揮官側の値へフォールバックする
+    // （docs/thinking-model-plan.md §3.5 設計1「非対称な認知」: 熟慮は呼び出し回数の少ない
+    //  指揮官に置き、呼び出しが多い艇は軽く速いモデルで反射的に動かす）。
+    boatModel: null,
+    boatMaxTokens: null,
+    transport: 'openai',
+    thinking: 'auto',
+    reasoningEffort: null,
+    boatThinking: null,
+    boatReasoningEffort: null,
+    timeoutMs: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -157,6 +178,14 @@ function parseArgs(argv) {
     else if (arg === '--boat-mode') opts.boatMode = argv[++i];
     else if (arg === '--boat-interval') opts.boatIntervalS = Number(argv[++i]);
     else if (arg === '--boat-latency') opts.boatLatencyS = Number(argv[++i]);
+    else if (arg === '--boat-model') opts.boatModel = argv[++i];
+    else if (arg === '--boat-max-tokens') opts.boatMaxTokens = Number(argv[++i]);
+    else if (arg === '--llm-transport') opts.transport = argv[++i];
+    else if (arg === '--thinking') opts.thinking = argv[++i];
+    else if (arg === '--reasoning-effort') opts.reasoningEffort = argv[++i];
+    else if (arg === '--boat-thinking') opts.boatThinking = argv[++i];
+    else if (arg === '--boat-reasoning-effort') opts.boatReasoningEffort = argv[++i];
+    else if (arg === '--timeout-ms') opts.timeoutMs = Number(argv[++i]);
     else {
       throw new Error(
         `unknown argument: ${arg} (known: --episodes N, --scenario NAME|path, --boats N, --out path, --quiet, --verbose, ` +
@@ -184,6 +213,36 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(opts.temperature) || opts.temperature < 0) {
     throw new Error(`--temperature must be a number >= 0, got: ${opts.temperature}`);
+  }
+  if (!['openai', 'ollama'].includes(opts.transport)) {
+    throw new Error(`--llm-transport must be openai|ollama, got: ${opts.transport}`);
+  }
+  for (const [flag, v] of [['--thinking', opts.thinking], ['--boat-thinking', opts.boatThinking]]) {
+    if (v !== null && !['auto', 'on', 'off'].includes(v)) {
+      throw new Error(`${flag} must be auto|on|off, got: ${v}`);
+    }
+  }
+  for (const [flag, v] of [['--reasoning-effort', opts.reasoningEffort], ['--boat-reasoning-effort', opts.boatReasoningEffort]]) {
+    if (v !== null && !['low', 'medium', 'high'].includes(v)) {
+      throw new Error(`${flag} must be low|medium|high, got: ${v}`);
+    }
+  }
+  // thinking:'off' は OpenAI 互換経路では **Ollama に無視される**ことを実測済み
+  // （docs/thinking-model-plan.md §2）。黙って効かないまま「thinking を切って測った」ことに
+  // なるのが最悪なので、Ollama 既定URLに対する off 指定は設定ミスとして落とす。
+  const wantsOff = opts.thinking === 'off' || opts.boatThinking === 'off';
+  if (wantsOff && opts.transport === 'openai' && /:11434/.test(opts.llmUrl ?? '')) {
+    throw new Error(
+      'thinking=off を Ollama(:11434) の OpenAI 互換経路へ指定している。Ollama は ' +
+        'chat_template_kwargs.enable_thinking も think も /v1 では無視する（実測済み）。' +
+        '--llm-transport ollama を付け、--llm-url は /v1 を外したベースURLにすること。'
+    );
+  }
+  if (opts.timeoutMs !== null && (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0)) {
+    throw new Error(`--timeout-ms must be a positive number, got: ${opts.timeoutMs}`);
+  }
+  if (opts.boatMaxTokens !== null && (!Number.isInteger(opts.boatMaxTokens) || opts.boatMaxTokens < 1)) {
+    throw new Error(`--boat-max-tokens must be a positive integer, got: ${opts.boatMaxTokens}`);
   }
   if (opts.maxTokens !== null && (!Number.isInteger(opts.maxTokens) || opts.maxTokens < 1)) {
     throw new Error(`--max-tokens must be a positive integer, got: ${opts.maxTokens}`);
@@ -742,6 +801,10 @@ async function main() {
           model: opts.model,
           temperature: opts.temperature,
           ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+          transport: opts.transport,
+          thinking: opts.thinking,
+          ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
           // 記録フックは同期。ここで待つと記録の都合が実測レイテンシへ混ざる（§2.5 I1）
           onCall: opts.llmLog ? (rec) => llmCallRecords.push(rec) : null,
         }),
@@ -780,9 +843,17 @@ async function main() {
         intervalS: opts.boatIntervalS,
         latencyS: opts.boatLatencyS,
         baseUrl: opts.llmUrl,
-        model: opts.model,
+        // 艇は呼び出し回数が多い。別モデル（軽量）・別 thinking 設定を与えられるようにし、
+        // 未指定なら指揮官側と同じ値へ落とす（thinking-model-plan.md §3.5 設計1）。
+        model: opts.boatModel ?? opts.model,
         temperature: opts.temperature,
-        ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+        ...(opts.boatMaxTokens ?? opts.maxTokens ? { maxTokens: opts.boatMaxTokens ?? opts.maxTokens } : {}),
+        ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+        transport: opts.transport,
+        thinking: opts.boatThinking ?? opts.thinking,
+        ...(opts.boatReasoningEffort ?? opts.reasoningEffort
+          ? { reasoningEffort: opts.boatReasoningEffort ?? opts.reasoningEffort }
+          : {}),
         onCall: opts.llmLog ? (rec) => llmCallRecords.push(rec) : null,
       });
       // 相討ちで消えた艇は判断しない＝推論を焚かない。サイクルは kept（指示なし）として
