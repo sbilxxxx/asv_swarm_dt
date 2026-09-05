@@ -1043,7 +1043,8 @@ async function main() {
     if (isBoat) {
       console.log(
         `${id}: calls=${stats.calls} obeys=${stats.obeys} overrides=${stats.overrides} ` +
-          `parseFailures=${stats.parseFailures} transportFailures=${stats.transportFailures} ` +
+          `parseFailures=${stats.parseFailures} offRadarTargets=${stats.offRadarTargets ?? 0} ` +
+          `transportFailures=${stats.transportFailures} ` +
           `keptOrders=${stats.keptOrders} onCallErrors=${stats.onCallErrors}`
       );
       console.log(
@@ -1065,12 +1066,25 @@ async function main() {
     }
     if (isBoat) {
       // 艇は obey が第一級の応答なので keptOrders が高くて正常（agent-io-design.md §1.2）。
-      // ここで警告に値するのは失敗（parse/transport）だけ。
-      const failureRate = (stats.parseFailures + stats.transportFailures) / Math.max(stats.calls, 1);
+      // 警告は2種類に分ける——直し方が違うため（2026-09-06）。
+      //   parse/transport : 出力の形かサーバの問題。プロンプトのスキーマ説明かモデル選定を疑う
+      //   off_radar_target: 形は正しく、見えていない相手を指した。**判断**の問題であり、
+      //                     プロンプトやサーバを直しても消えない。部分観測が効いている条件では
+      //                     これが出ること自体が観測結果なので、「直せ」ではなく「混ぜるな」と言う
+      const calls = Math.max(stats.calls, 1);
+      const failureRate = (stats.parseFailures + stats.transportFailures) / calls;
       if (failureRate > 0.2) {
         console.log(
           `WARNING: ${id} failed (parse/transport) on ${(failureRate * 100).toFixed(1)}% of cycles. ` +
             'Fix the prompt or the server before using these outcomes.'
+        );
+      }
+      const offRadarRate = (stats.offRadarTargets ?? 0) / calls;
+      if (offRadarRate > 0.05) {
+        console.log(
+          `NOTE: ${id} named an unseen contact on ${(offRadarRate * 100).toFixed(1)}% of cycles ` +
+            `(${stats.offRadarTargets}/${stats.calls}). 出力は妥当な JSON で、見えていない相手を指した——` +
+            '判断の問題であってプロンプトやサーバの故障ではない。部分観測下の振る舞いとして記録すること。'
         );
       }
     } else {

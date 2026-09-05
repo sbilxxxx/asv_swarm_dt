@@ -41,6 +41,17 @@ export const BOAT_OUTCOMES = Object.freeze({
   /** 艇が指揮官の指示に従うと決めた（正常。失敗ではない） */
   OBEY: 'obey',
   PARSE: 'parse',
+  /**
+   * 応答は妥当な JSON だが、**自分のレーダーに映っていない相手**を迎撃対象に指定した。
+   * PARSE（出力の形が壊れている）と分けて数える——直し方が全く違うため。
+   * PARSE はプロンプトのスキーマ説明かモデルの出力能力の問題だが、こちらは
+   * 「見えないときに現状維持と言えず、指揮官の命令にあった敵IDを復唱してしまう」という
+   * **判断の問題**である。2026-09-06 の実測（盤面2倍・レーダー0.5倍で部分観測を成立させた条件）で
+   * 艇の失敗 137 件を調べたところ、JSON 破損は 0 件、全件がこれだった（うち 83 件は
+   * レーダーが完全に空で、艇自身が理由欄に "No intruder, but ordered to intercept." と書いていた）。
+   * 部分観測を作って初めて露出する弱点なので、名前を与えて数えられるようにしておく。
+   */
+  OFF_RADAR_TARGET: 'off_radar_target',
   TIMEOUT: LLM_HTTP_FAILURES.TIMEOUT,
   CONNECTION: LLM_HTTP_FAILURES.CONNECTION,
   HTTP_STATUS: LLM_HTTP_FAILURES.HTTP_STATUS,
@@ -238,7 +249,12 @@ export function parseBoatDecision(text, { boatId, contactIds }) {
     const target = typeof obj.target === 'string' ? obj.target.trim() : null;
     // 見えていない相手は迎撃できない。名簿外は落とす（parse_orders.js と同じ第一の防壁）
     if (!target || !contactIds.includes(target)) {
-      return { ok: false, error: `intercept target "${target}" is not on this boat's radar` };
+      // 形は正しいが中身が成立しない。呼び出し側が PARSE と分けて数えられるよう印を付ける
+      return {
+        ok: false,
+        offRadarTarget: true,
+        error: `intercept target "${target}" is not on this boat's radar`,
+      };
     }
     return { ok: true, obey: false, order: { boat: boatId, action: 'intercept', target }, reason };
   }
@@ -306,6 +322,8 @@ export function createLlmBoatAgentFn(options) {
     overrides: 0, // 指揮官の指示を上書きした回数（この実装の主指標）
     obeys: 0,
     parseFailures: 0,
+    /** 妥当な JSON だが見えていない相手を指した回数（判断の問題。parseFailures とは別物） */
+    offRadarTargets: 0,
     transportFailures: 0,
     keptOrders: 0, // obey と失敗の合計＝新しい指示を出さなかった回数
     totalLatencyMs: 0,
@@ -359,7 +377,11 @@ export function createLlmBoatAgentFn(options) {
         boatId,
         contactIds: picture.contacts.map((c) => c.id),
       });
-      if (!parsed.ok) {
+      if (!parsed.ok && parsed.offRadarTarget) {
+        outcome = BOAT_OUTCOMES.OFF_RADAR_TARGET;
+        failure = `off_radar_target: ${parsed.error}`;
+        stats.offRadarTargets += 1;
+      } else if (!parsed.ok) {
         outcome = BOAT_OUTCOMES.PARSE;
         failure = `parse: ${parsed.error}`;
         stats.parseFailures += 1;

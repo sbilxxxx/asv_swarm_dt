@@ -25,9 +25,12 @@
  *   （ThreeCameraSensor.captureSize）。
  *
  * アーム:
- *   --arm vlm      画像＋状況テキスト → VLM が keep/replace を返す（主経路）
- *   --arm blind    同じ状況テキストのみ（画像なし）。視覚が効いているかの統制群
- *   --arm scripted 推論なし。目的地へ直行。サーバが無くても必ず完走する基準線
+ *   --arm vlm       画像＋状況テキスト → VLM が **waypoint 座標**を返す（plan アーム）
+ *   --arm vlm-watch 画像＋状況テキスト → VLM は **機動を選ぶだけ**（hold/pass_port/pass_starboard/
+ *                   slow/stop ＋ 離隔）。waypoint は core/sim/navigator/avoidance.js が
+ *                   CPA から生成する。座標を渡さず・作らせないアーム（H2）
+ *   --arm blind     同じ状況テキストのみ（画像なし）。視覚が効いているかの統制群
+ *   --arm scripted  推論なし。目的地へ直行。サーバが無くても必ず完走する基準線
  *
  * 使い方:
  *   node scripts/vlm_navigator_run.js --arm vlm --model qwen2.5vl:7b
@@ -45,6 +48,9 @@
  *                      thinking 系VLM（qwen3-vl 等）で thinking を切るには ollama が要る
  *                      （実測: OpenAI互換の enable_thinking を Ollama は無視する）
  *   --thinking auto|on|off     既定 auto
+ *   --episode N        エピソード番号（既定 1）。**同じ番号は必ず同じ軌跡**になり、
+ *                      違う番号では初期針路（±25度）と交通船の位相（±60m）が
+ *                      決定論的に振れる（R1。乱数は使わない）
  *   --cycles N         最大判断サイクル数。既定 12
  *   --interval S       判断間隔（シム秒）。既定 10
  *   --render S         render ステージの宣言値（シム秒）。既定 0.1
@@ -56,7 +62,7 @@
  *   --timeout-ms N     既定 60000
  *   --out-dir DIR      既定 logs/vlm-nav-<YYYY-MM-DD_HHMM>-<arm>
  *   --no-warmup        ウォームアップ推論（コールドスタート約20s）を省く
- *   --port N           既定 8974
+ *   --port N           静的配信ポート。既定 0（OS が空きを選ぶ）。同時実行しても衝突しない
  */
 'use strict';
 
@@ -77,6 +83,61 @@ const MIME = {
 /** 物理ステップ。headless_run.js / digital-twin/nav_mode.js と同じ */
 const DT_S = 0.1;
 
+/**
+ * エピソードごとの**設計されたばらつき**（R1）。
+ *
+ * 【なぜ必要か】2026-09-06 に5本回して分かったこと:
+ *   1. ページの rAF ループがランナーの一時停止までに実時間で約4秒シムを進めており、
+ *      開始状態が実行ごとに違った（t=0.7〜1.0s・初期針路 91.1〜91.6°）。
+ *      **再現できない**うえ、実時間が実験結果に混入している（time-model.md §12.5 I4 違反）。
+ *   2. その 0.3 秒のゆらぎだけで最接近距離が 30〜131 m に散った。
+ *      系が初期条件に極端に敏感なのに、**そのばらつきが設計されていない**ので何にも帰属できない。
+ *
+ * 【対処】開始状態を必ずリセットして決定論を回復し（`world.resetEntities()` ＋ `clock=0`）、
+ * そのうえで**エピソード番号から決定論的に**初期針路と交通船の位相を振る。
+ * L0 が侵入艇の迂回をエピソードごとに変えていたのと同じ形で、
+ * 「同じ番号は必ず同じ、違う番号は意図して違う」状態にする。
+ *
+ * 乱数は使わない（decision_scheduler.js の latencyModel と同じ規律。処理系の擬似乱数に依存すると
+ * 実行環境で結果が変わる）。xmur3 + mulberry32 の1ステップという同じ作りを使う。
+ */
+function hashSeed(text) {
+  let h = 1779033703 ^ text.length;
+  for (let i = 0; i < text.length; i++) {
+    h = Math.imul(h ^ text.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  h = Math.imul(h ^ (h >>> 16), 2246822507);
+  h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+function unitDraw(seed32) {
+  let t = (seed32 + 0x6d2b79f5) >>> 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/** 初期針路のばらつき幅（度）。±この範囲で振る */
+const EPISODE_HEADING_SPREAD_DEG = 25;
+/** 交通船の位相のばらつき幅（メートル・弧長）。すれ違いの時刻が変わる */
+const EPISODE_TRAFFIC_PHASE_M = 60;
+
+/**
+ * @param {number} episode - 1 以上の整数
+ * @param {number} trafficCount
+ * @returns {{headingOffsetDeg:number, trafficPhaseM:number[]}}
+ */
+function episodeVariation(episode, trafficCount) {
+  const h = unitDraw(hashSeed(`pilotage|heading|${episode}`));
+  const phases = [];
+  for (let i = 0; i < trafficCount; i++) {
+    phases.push((unitDraw(hashSeed(`pilotage|traffic${i}|${episode}`)) * 2 - 1) * EPISODE_TRAFFIC_PHASE_M);
+  }
+  return { headingOffsetDeg: (h * 2 - 1) * EPISODE_HEADING_SPREAD_DEG, trafficPhaseM: phases };
+}
+
 function parseArgs(argv) {
   const o = {
     arm: 'vlm',
@@ -95,8 +156,13 @@ function parseArgs(argv) {
     maxTokens: 400,
     timeoutMs: 60000,
     outDir: null,
+    episode: 1,
     warmup: true,
-    port: 8974,
+    // 0 = OS に空きポートを選ばせる。固定ポートだと**同じスクリプトを同時に2本走らせた瞬間に
+    // EADDRINUSE で落ちる**（2026-09-06、gpujob が VLM ジョブを並走させて実際に2件落ちた）。
+    // このサーバは puppeteer に digital-twin/ を配るためだけの内部用で、外から番号を知る必要が無い。
+    // 手元から覗きたいときだけ --port で固定する。
+    port: 0,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -114,6 +180,7 @@ function parseArgs(argv) {
     else if (a === '--max-tokens') o.maxTokens = Number(argv[++i]);
     else if (a === '--timeout-ms') o.timeoutMs = Number(argv[++i]);
     else if (a === '--out-dir') o.outDir = argv[++i];
+    else if (a === '--episode') o.episode = Number(argv[++i]);
     else if (a === '--no-warmup') o.warmup = false;
     else if (a === '--port') o.port = Number(argv[++i]);
     else if (a === '--dest') {
@@ -129,9 +196,12 @@ function parseArgs(argv) {
       process.exit(0);
     } else throw new Error(`unknown option: ${a}`);
   }
-  if (!['vlm', 'blind', 'scripted'].includes(o.arm)) throw new Error(`--arm は vlm|blind|scripted: ${o.arm}`);
+  if (!['vlm', 'vlm-watch', 'blind', 'scripted'].includes(o.arm)) {
+    throw new Error(`--arm は vlm|vlm-watch|blind|scripted: ${o.arm}`);
+  }
   if (!['openai', 'ollama'].includes(o.transport)) throw new Error(`--transport は openai|ollama: ${o.transport}`);
   if (!['auto', 'on', 'off'].includes(o.thinking)) throw new Error(`--thinking は auto|on|off: ${o.thinking}`);
+  if (!Number.isInteger(o.episode) || o.episode < 1) throw new Error(`--episode は1以上の整数: ${o.episode}`);
   // Ollama ネイティブは /api/chat に居る。/v1 付きの既定URLをそのまま渡すと 404 になるので直す
   if (o.transport === 'ollama') o.url = o.url.replace(/\/v1\/?$/, '');
   if (o.renderS + o.inferS >= o.intervalS) {
@@ -143,11 +213,20 @@ function parseArgs(argv) {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
     const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
-    o.outDir = path.join(ROOT, 'logs', `vlm-nav-${stamp}-${o.arm}`);
+    o.outDir = path.join(ROOT, 'logs', `vlm-nav-${stamp}-${o.arm}-ep${o.episode}`);
   }
   return o;
 }
 
+/**
+ * ページ配信用の内部サーバ。**既定はポート0（OSに割り当てさせる）**。
+ *
+ * 固定ポートだと**同じランナーを並列実行したときに衝突する**（EADDRINUSE）。
+ * gpujob は shared ジョブ（シムラン）を意図的に並走させる設計なので
+ * （結果は宣言値 latencyS だけで決まり GPU 競合の影響を受けないため）、
+ * ランナー側が並列に耐えられないと複数エピソードを同時に回せない。
+ * 2026-09-06 に実際に3本同時投入して2本が rc1 で落ちた。
+ */
 function startServer(port) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -164,7 +243,7 @@ function startServer(port) {
       });
     });
     server.on('error', reject);
-    server.listen(port, () => resolve(server));
+    server.listen(port, () => resolve(server));  // port=0 なら server.address().port に実ポートが入る
   });
 }
 
@@ -176,10 +255,34 @@ function startServer(port) {
 // 状況図の作り方をここに書き写さないのが要——書き写した瞬間、画面と実験ログが別物になる。
 // ---------------------------------------------------------------------------
 
-const INSTALL_NAV = ({ arrivalM, destination, withImage, res }) => `
+const INSTALL_NAV = ({ arrivalM, destination, withImage, res, variation }) => `
 (async () => {
   const { three, world, scenario, traffic } = window.__debug;
   window.__debug.paused = true;              // main.js の rAF ループを止め、進行はこちらが持つ
+
+  // --- R1: 決定論の回復 ---
+  // ここへ来るまでにページの rAF ループが実時間で数秒シムを進めている（実測 t=0.7〜1.0s、
+  // 初期針路 91.1〜91.6度）。放置すると開始状態が実行ごとに違い、再現できないうえ
+  // 実時間が実験結果に混入する（docs/time-model.md §12.5 I4）。必ず初期状態へ戻す。
+  world.resetEntities();                     // spawn 位置・針路へ戻し、clock を 0 にする
+  if (traffic) traffic.reset();              // 交通船も startS へ戻す
+  world.orders.clear();
+  world.boatController.reset();
+
+  // --- R1: 設計されたばらつき（Node 側が決定論的に算出した値を適用するだけ）---
+  const VARIATION = ${JSON.stringify(variation)};
+  {
+    const hi = world.state.indexOf(window.__debug.heroId ?? world.state.id[0]);
+    if (hi >= 0) world.state.heading[hi] += (VARIATION.headingOffsetDeg * Math.PI) / 180;
+    if (traffic) {
+      traffic.specs.forEach((sp, i) => {
+        const phase = VARIATION.trafficPhaseM[i] ?? 0;
+        traffic.progress.set(sp.id, sp.startS + phase);
+      });
+      traffic.step(world, 0);                // 位相を反映した位置へ即座に置き直す
+    }
+  }
+  three.updateShips(world.state.snapshot(), world.clock);
   const [picMod, planMod] = await Promise.all([
     import('/core/sim/navigator/navigator_picture.js'),
     import('/core/sim/navigator/plan_follower.js'),
@@ -202,6 +305,7 @@ const INSTALL_NAV = ({ arrivalM, destination, withImage, res }) => `
   }
 
   const plan = new planMod.RoutePlan({ destination: dest, arrivalM: ARRIVAL_M });
+  const trackNamer = new picMod.TrackNamer();   // H0: 接触idの匿名化
   if (${withImage ? 'true' : 'false'}) world.sensors.camera.captureSize = { w: ${res.w}, h: ${res.h} };
 
   const trail = [];
@@ -237,6 +341,7 @@ const INSTALL_NAV = ({ arrivalM, destination, withImage, res }) => `
         plan: plan.snapshot(),
         arrivalM: ARRIVAL_M,
         image,
+        trackNamer,
       });
       return { picture: pic, renderMs, arrived, pathLengthM };
     },
@@ -343,11 +448,14 @@ async function main() {
     );
   }
 
-  const withImage = opts.arm === 'vlm';
+  const withImage = opts.arm === 'vlm' || opts.arm === 'vlm-watch';
   const latencyS = opts.renderS + opts.inferS;
 
   const puppeteer = require(path.join(ROOT, '.devtools', 'node_modules', 'puppeteer'));
   const server = await startServer(opts.port);
+  const servedPort = server.address().port;
+  // port=0 で起動した場合、以降の URL 組み立てには**実際に割り当てられた**番号を使う
+  opts.port = server.address().port;
   const browser = await puppeteer.launch({
     headless: 'shell',
     args: [
@@ -369,7 +477,7 @@ async function main() {
     `[nav] arm=${opts.arm} scenario=${opts.scenario} model=${opts.model} ` +
       `cycles=${opts.cycles} interval=${opts.intervalS}s stages=render ${opts.renderS}s + infer ${opts.inferS}s`
   );
-  await page.goto(`http://localhost:${opts.port}/digital-twin/?scenario=${encodeURIComponent(opts.scenario)}`, {
+  await page.goto(`http://localhost:${servedPort}/digital-twin/?scenario=${encodeURIComponent(opts.scenario)}`, {
     waitUntil: 'domcontentloaded',
     timeout: 20000,
   });
@@ -377,7 +485,23 @@ async function main() {
     timeout: 30000,
   });
   await new Promise((r) => setTimeout(r, 4000)); // シーン（水面・ランドマーク）が出そろうのを待つ
-  await page.evaluate(INSTALL_NAV({ arrivalM: opts.arrivalM, destination: opts.destination, withImage, res: opts.res }));
+  // 交通船の数はシナリオから読む（ばらつきの本数を合わせるため）
+  const trafficCount = await page.evaluate('window.__debug.traffic ? window.__debug.traffic.count : 0');
+  const variation = episodeVariation(opts.episode, trafficCount);
+  console.log(
+    `[nav] episode=${opts.episode} 初期針路 ${variation.headingOffsetDeg >= 0 ? '+' : ''}` +
+      `${variation.headingOffsetDeg.toFixed(1)}deg / 交通船位相 ` +
+      `[${variation.trafficPhaseM.map((v) => v.toFixed(0)).join(', ')}]m（決定論。同じ番号は必ず同じ）`
+  );
+  await page.evaluate(
+    INSTALL_NAV({
+      arrivalM: opts.arrivalM,
+      destination: opts.destination,
+      withImage,
+      res: opts.res,
+      variation,
+    })
+  );
   const setup = await page.evaluate(
     '({ hero: window.__vlmNav.heroId, dest: window.__vlmNav.destination, bounds: window.__vlmNav.bounds })'
   );
@@ -401,6 +525,7 @@ async function main() {
           timeoutMs: opts.timeoutMs,
           transport: opts.transport,
           thinking: opts.thinking,
+          mode: opts.arm === 'vlm-watch' ? 'watch' : 'plan',
           numCtx: declaredNumCtx,
           onCall: (record) => {
             lastCall = record;
@@ -481,6 +606,7 @@ async function main() {
       action: decision.action,
       resentSamePlan: decision.resentSamePlan,
       watch: decision.watch,
+      maneuver: decision.maneuver,
       speed: decision.speed,
       waypoints: decision.waypoints,
       notes: decision.notes,
@@ -511,6 +637,11 @@ async function main() {
         `\n      render ${Math.round(snap.renderMs)}ms  infer ${decision.latencyMs}ms  outcome ${decision.outcome}` +
         (decision.failure ? ` — ${decision.failure}` : '') +
         `\n      watch: ${decision.watch ?? '-'}` +
+        (decision.maneuver
+          ? `\n      maneuver: ${decision.maneuver.name}` +
+            `${decision.maneuver.targetTrack ? ` → ${decision.maneuver.targetTrack}` : ''}` +
+            ` offset ${decision.maneuver.offsetM}m`
+          : '') +
         `\n      action: ${decision.action}${decision.resentSamePlan ? ' (same plan resent)' : ''}  plan: ${wpStr}` +
         (decision.notes.length ? `  notes: ${decision.notes.join('; ')}` : '') +
         `\n      -> after ${opts.intervalS}s: (${after.pose.eastM.toFixed(0)},${after.pose.northM.toFixed(0)})` +
@@ -531,6 +662,8 @@ async function main() {
   const summary = {
     arm: opts.arm,
     scenario: opts.scenario,
+    episode: opts.episode,
+    variation,
     model: opts.arm === 'scripted' ? null : opts.model,
     transport: opts.transport,
     thinking: opts.thinking,
@@ -554,6 +687,8 @@ async function main() {
     parseFailures: stats.parseFailures ?? 0,
     transportFailures: stats.transportFailures ?? 0,
     droppedByReason: stats.droppedByReason ?? {},
+    byManeuver: stats.byManeuver ?? null,
+    clearanceShort: stats.clearanceShort ?? 0,
     byOutcome: stats.byOutcome ?? {},
     totalOutputTokens: stats.totalOutputTokens ?? 0,
     measured: {
@@ -585,6 +720,12 @@ async function main() {
     );
   }
   console.log(`dropped waypoints   ${Object.entries(summary.droppedByReason).map(([k, v]) => `${k}×${v}`).join(', ') || '-'}`);
+  if (summary.byManeuver) {
+    console.log(
+      `maneuvers           ${Object.entries(summary.byManeuver).filter(([, v]) => v > 0).map(([k, v]) => `${k}×${v}`).join(', ') || '-'}` +
+        `   離隔不足 ${summary.clearanceShort}`
+    );
+  }
   console.log(
     `measured (記録のみ)  infer p50/max ${summary.measured.inferMs ? summary.measured.inferMs.p50 + '/' + summary.measured.inferMs.max + ' ms' : '-'}` +
       `   render p50 ${summary.measured.renderMs ? summary.measured.renderMs.p50 + ' ms' : '-'}`

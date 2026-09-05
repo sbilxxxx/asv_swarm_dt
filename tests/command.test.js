@@ -1725,6 +1725,44 @@ async function testMissionRulesOfTheBlastRadius(core) {
   console.log('OK: blast radius decides interception, collateral damage, and the flag for every armed class');
 }
 
+/**
+ * 艇の失敗は2種類あり、混ぜると直し方を誤る（2026-09-06）。
+ *   PARSE            — 出力の形が壊れている。プロンプトのスキーマ説明かモデル選定を疑う
+ *   OFF_RADAR_TARGET — 形は正しく、見えていない相手を指した。**判断**の問題であり、
+ *                      プロンプトやサーバを直しても消えない
+ * 実測では艇の失敗137件のうち JSON 破損は0件で、全件が後者だった。同じバケットに
+ * 入れていたせいで「プロンプトかサーバを直せ」という誤った警告が出ていた。
+ */
+async function testBoatSeparatesOffRadarTargetFromParseFailure() {
+  const { parseBoatDecision, BOAT_OUTCOMES } = await import('../core/sim/agents/boat_agent.js');
+  const ctx = { boatId: 'def-runner-1', contactIds: ['int-heavy'] };
+
+  // 形は妥当だが、レーダーに映っていない相手を指した
+  const offRadar = parseBoatDecision(
+    '{"decision":"override","action":"intercept","target":"int-runner-1","reason":"No intruder, but ordered to intercept."}',
+    ctx
+  );
+  assert.strictEqual(offRadar.ok, false, 'unseen targets are still rejected');
+  assert.strictEqual(offRadar.offRadarTarget, true, 'the rejection is labelled so it can be counted apart');
+  assert.ok(/radar/.test(offRadar.error), offRadar.error);
+
+  // 本当に壊れている出力には印を付けない
+  const broken = parseBoatDecision('not json at all', ctx);
+  assert.strictEqual(broken.ok, false);
+  assert.notStrictEqual(broken.offRadarTarget, true, 'a malformed body is not an off-radar target');
+
+  // 見えている相手は通る（防壁が厳しすぎないこと）
+  const seen = parseBoatDecision('{"decision":"override","action":"intercept","target":"int-heavy"}', ctx);
+  assert.strictEqual(seen.ok, true, 'a visible target is accepted');
+
+  assert.notStrictEqual(
+    BOAT_OUTCOMES.OFF_RADAR_TARGET,
+    BOAT_OUTCOMES.PARSE,
+    '2つの結末は別の名前を持つ（byOutcome で分けて数えられる）'
+  );
+  console.log('  ok: 艇の「見えない敵を指した」はパース失敗と別に数えられる');
+}
+
 async function main() {
   const core = await loadCore();
   await testRadarRangeIsConfigurable(core);
@@ -1755,6 +1793,7 @@ async function main() {
   await testHeadlessTimingCountsSplitAppliedFromKept(core);
   await testScriptedIntruderApproachDoesNotCycle();
   await testLlmCommanderCountsAnAsyncOnCallFailure();
+  await testBoatSeparatesOffRadarTargetFromParseFailure();
 
   console.log('\nAll command tests passed.');
 }
