@@ -1,0 +1,148 @@
+{
+  "name": "flag_defence_squadrons_f8",
+  "note": "[大盤面シリーズ] fieldScale=8（一辺 約4.4km相当）/ radarScale=0.5 / episodeTimeLimitS=1920。scripted 実測: 平均エピソード 950s・指揮官の判断 95回/ep。盤面を広げる狙いは、指揮官が「適応→観測→再適応」を反復できる回数を確保すること（f=1 では3回しか判断できない）。",
+  "adapter": "manual_coastline",
+  "landmarkSet": "tokyo_bay",
+  "sensors": {
+    "perShipClass": true,
+    "radarRangeM": 600,
+    "note": "perShipClass=true のとき探知距離は艦種ごと（快速300m / 索敵1200m / 重装400m。core/sim/ship_classes.js）。radarRangeM は艦種が未知だった場合のフォールバック。",
+    "radarScale": 0.5
+  },
+  "originLatLon": {
+    "lat": 35.45,
+    "lon": 139.75
+  },
+  "spawnsAreaLatLon": [
+    {
+      "lat": 35.422294,
+      "lon": 139.72515600000003
+    },
+    {
+      "lat": 35.422294,
+      "lon": 139.8371560000001
+    },
+    {
+      "lat": 35.494294000000004,
+      "lon": 139.8371560000001
+    },
+    {
+      "lat": 35.494294000000004,
+      "lon": 139.72515600000003
+    }
+  ],
+  "coastlineLatLon": [
+    {
+      "lat": 35.458534,
+      "lon": 139.739524
+    },
+    {
+      "lat": 35.458534,
+      "lon": 139.760476
+    },
+    {
+      "lat": 35.454492,
+      "lon": 139.760476
+    },
+    {
+      "lat": 35.453144,
+      "lon": 139.756065
+    },
+    {
+      "lat": 35.454042,
+      "lon": 139.751654
+    },
+    {
+      "lat": 35.452515,
+      "lon": 139.747243
+    },
+    {
+      "lat": 35.453593,
+      "lon": 139.743384
+    },
+    {
+      "lat": 35.452246,
+      "lon": 139.739524
+    }
+  ],
+  "spawns": [
+    {
+      "id": "def-heavy",
+      "faction": "defender",
+      "shipClass": "heavy",
+      "platform": "asv",
+      "lat": 35.44586200000001,
+      "lon": 139.75990000000007,
+      "headingDeg": 0
+    },
+    {
+      "id": "def-runner-1",
+      "faction": "defender",
+      "shipClass": "runner",
+      "platform": "asv",
+      "lat": 35.453070000000004,
+      "lon": 139.77315600000003,
+      "headingDeg": 0
+    },
+    {
+      "id": "def-runner-2",
+      "faction": "defender",
+      "shipClass": "runner",
+      "platform": "asv",
+      "lat": 35.43865400000002,
+      "lon": 139.77315600000003,
+      "headingDeg": 0
+    },
+    {
+      "id": "def-scout",
+      "faction": "defender",
+      "shipClass": "scout",
+      "platform": "asv",
+      "lat": 35.44586200000001,
+      "lon": 139.77757200000002,
+      "headingDeg": 0
+    },
+    {
+      "id": "int-heavy",
+      "faction": "intruder",
+      "shipClass": "heavy",
+      "platform": "asv",
+      "lat": 35.44586200000001,
+      "lon": 139.79525199999995,
+      "headingDeg": 180
+    },
+    {
+      "id": "int-runner-1",
+      "faction": "intruder",
+      "shipClass": "runner",
+      "platform": "asv",
+      "lat": 35.45667000000001,
+      "lon": 139.79525199999995,
+      "headingDeg": 180
+    },
+    {
+      "id": "int-runner-2",
+      "faction": "intruder",
+      "shipClass": "runner",
+      "platform": "asv",
+      "lat": 35.435054000000015,
+      "lon": 139.79525199999995,
+      "headingDeg": 180
+    },
+    {
+      "id": "int-scout",
+      "faction": "intruder",
+      "shipClass": "scout",
+      "platform": "asv",
+      "lat": 35.44586200000001,
+      "lon": 139.80409200000014,
+      "headingDeg": 180
+    }
+  ],
+  "protectedAssetLatLon": {
+    "lat": 35.445958,
+    "lon": 139.746692,
+    "note": "旗（防護対象）。侵入側の重装艇がここへ80m以内まで到達すれば防御側の負け。ただし爆破半径の中にこの点が入っても旗は壊れる（core/sim/mission.js の巻き添え判定）ため、防御側は旗の至近で迎撃できない＝籠城が成立しない。"
+  },
+  "episodeTimeLimitS": 1920
+}

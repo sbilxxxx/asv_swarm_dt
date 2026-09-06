@@ -137,3 +137,39 @@ L3（自己対戦ログによる戦術学習）は構想のまま置く。本選
 | L0 完了時 | `review-findings-2026-08-07.md` の B-7 を対応済へ、`README.md` の実装状況、`l0-experiment-log.md` を実測で作成、`system-design.md` に時間モデルへの導線 |
 | Phase 2 着手時 | `phase2-boat-llm-plan.md` を新規作成、`time-model.md` §12.5 段階適用表に採用した `deadlineS`/`onMiss` の値を記入 |
 | L1 着手時 | `time-model.md` §7 に renderS/inferS の実測値 |
+
+## 11. チャット間の分担（2026-09-06〜）
+
+このリポジトリは現在**2つのチャットが同時に触っている**。衝突を避けるため担当を固定する。
+
+| | マルチエージェント実験チャット | VLM / L1 航海士チャット |
+|---|---|---|
+| GPU | `sim` = GPU4-7 / ollama :11435 | `vlm` = GPU0-3 / ollama :11434 |
+| 主担当 | 盤面スケール実験、指揮官・艇の LLM、`gpujob` 運用、**3D の大盤面対応** | 単艦 VLM 航行、知覚〜計画フロー、`num_ctx` 収容設計 |
+| 触るファイル | `digital-twin/scene_builder.js`<br>`core/scenarios/generated/*`<br>`scripts/headless_run.js`・`sweep_scenarios.js`<br>`core/sim/agents/boat_agent.js`・`command/*` | `core/sim/navigator/*`<br>`digital-twin/nav_mode.js`<br>`scripts/vlm_navigator_run.js`・`serve_vlm.js`<br>`core/sim/agents/context_budget.js` |
+| 共有（要調整） | `core/sim/agents/llm_http.js`・`digital-twin/main.js`・`CLAUDE.md`・本ファイル | 同左 |
+
+**共有ファイルのコミットは `git add -p` でハンク単位に選ぶ。**
+`git add -A` はもちろん、ファイル単位の `git add` でも相手の同時編集を巻き込む
+（2026-09-06 に実際に2回発生し、相手の作業145行が別チャットのコミットに混入した）。
+
+### 進行中の宣言
+
+- **3D デジタルツインの大盤面対応は、マルチエージェント実験チャットが担当する。**
+  計画は [`3d-large-field-plan.md`](3d-large-field-plan.md)。
+  盤面を f=16（一辺 約8.8km）まで広げる実験に伴い、`digital-twin/scene_builder.js` の
+  海面 LOD・影カメラをカメラ追従へ変更する（案A「注目領域のみ高精細」）。
+  着手は大盤面ジョブ（約12〜14時間）の完走後。**VLM チャットはこのファイルを触らないでほしい。**
+
+### 盤面スケールの実測（2026-09-06・scripted 20ep）
+
+盤面を広げる根拠。指揮官が1エピソードで判断できる回数が律速だった。
+
+| 盤面 | 一辺 | 平均エピソード長 | 指揮官の判断/ep | 必要 VRAM |
+|---|---|---:|---:|---:|
+| f=1（従来） | 約0.55km | 34 s | **3 回** | 36 GB |
+| f=4 | 約2.2km | 405 s | 40 回 | 36 GB |
+| **f=16** | **約8.8km** | 2,011 s | **201 回** | 36 GB |
+
+**必要 VRAM は盤面サイズと無関係**（プロンプト長が伸びないため。実測 664→571文字）。
+増えるのは実行時間だけで、wall ≒ シム時間 × 0.9。
