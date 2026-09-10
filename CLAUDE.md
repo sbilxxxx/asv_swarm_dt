@@ -55,7 +55,8 @@ Ollama は `num_ctx` で宣言した長さのKVキャッシュを**先に丸ご�
 値の出所はモデル1つだけにし、コードは `/api/show` から読んで実測 `prompt_tokens` と
 突き合わせるだけにする（[`core/sim/agents/context_budget.js`](core/sim/agents/context_budget.js)）。
 **小さすぎる `num_ctx` はエラーにならず黙ってプロンプトを切り捨てる**（画像が届かないまま答える）。
-このマシンのGPU分割の取り決めは `/tmp/GPU-USAGE-CONVENTION.md`（vlm=GPU0-3:11434 / sim=GPU4-7:11435）。
+GPU分割の取り決めは [`ops/gpu-usage-convention-cluster.md`](ops/gpu-usage-convention-cluster.md)
+（クラスタ時代の記録。移行先は単一GPUなので分割しない）。
 
 **時間の扱いは [`docs/time-model.md`](docs/time-model.md) が正典。**
 推論を含む意思決定はシム時間上で瞬時ではない（t_issue → t_apply）。変数は「ルール（結果を決める設定値）」と
@@ -86,14 +87,23 @@ f=1 では**3回**しかなく采配が展開しないため（f=16 で201回）
 
 ## GPU 実行のルール
 
-**推論を伴う処理を走らせる前に、必ず `gpu-jobs` スキルを読む**（`~/.claude/skills/gpu-jobs/SKILL.md`）。
-このマシンはスケジューラが無く sudo も使えないため、GPU の割り当ては規律でしか守れない。要点:
+**推論を伴う処理を走らせる前に、必ず `gpu-jobs` スキルを読む**
+（[`.claude/skills/gpu-jobs/SKILL.md`](.claude/skills/gpu-jobs/SKILL.md)。
+以前は `~/.claude/skills/` にあり clone に付いてこなかったのでリポジトリ内へ移した）。要点:
 
-- GPU は `vlm`（0-3・:11434）と `sim`（4-7・:11435）に静的分割。**跨いで載せない**
 - **`num_ctx` は必ず実測で決める**（[`scripts/suggest_num_ctx.js`](scripts/suggest_num_ctx.js)）。
   既定のまま載せると 7B のモデルでも 85GB を占有し、2026-09-05 に実験が CPU へ退避して7時間空回りした
 - **VRAM に載らないなら実行しない。** CPU 退避で粘ると、計測がハードウェア速度に支配されて無意味になる
-- 単発の疎通確認以外は `gpujob submit` でキューに積む（グループ内で推論を並走させない）
+- **移行先は RTX 3060 12GB の単一GPU。** 7B/8B しか載らず、指揮官モデル（32B/72B/27B-think）は
+  **載らない**。`OLLAMA_NUM_PARALLEL` は 1、ポートは 11434 の1本（`vlm`/`sim` の分割はしない）
+- 派生モデルは [`ops/models/`](ops/models/) の Modelfile から `ollama create` で作る。
+  重みは持ち出さず再取得する（[`ops/README.md`](ops/README.md)）
+
+## クラスタからの移行
+
+**[`docs/migration-to-local-gpu.md`](docs/migration-to-local-gpu.md) が移行の手順書。**
+何をGitHubで運び何をアーカイブで運ぶか、転送と検証の手順、移行先での復元、
+そして VRAM が 192GB → 12GB になることで**実験計画のどこが変わるか**を記載。
 
 ## 品質担保
 

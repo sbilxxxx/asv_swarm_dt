@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# gpujob v2 — ben_ben 用の GPU ジョブ管理（8×RTX A5000 / スケジューラ・root なし）。
+#
+# ============================== v2 の設計 ==============================
+#
+# 【v1 の問題】全ジョブを直列化していたため、シムジョブ1本の実行中に GPU 8基のうち
+# 7基が完全に遊んでいた（実測 2026-09-06: GPU5 のみ 13〜71%、他は 0%）。
+# シムは推論を await するレイテンシ律速の処理で、1本ではGPUを飽和させられない。
+#
+# 【核心: ジョブは2種類ある】
+#   shared    — シムラン（headless_run.js 等）。docs/time-model.md §9 のとおり、
+#               シム結果は宣言値 latencyS だけで決まり、GPU競合の影響を受けない
+#               （変わるのは実行時間と「記録専用」の実測値だけ）。→ 同時に走らせてよい
+#   exclusive — レイテンシ計測（llm_probe.js / suggest_num_ctx.js）。
+#               レイテンシそのものが成果物。→ 単独で走らせる
+#
+# 【実装】カーネルの flock がそのままこの意味論を持つ:
+#   shared    ジョブは flock -s（共有ロック）を持って並走する（上限 GPUJOB_MAX_SHARED、既定3）
+#   exclusive ジョブは flock -x（排他ロック）を取る＝全 shared の完了を自然に待つ
+#
+# 【グループ】NVLink が無く GPU0-3 / GPU4-7 が別 NUMA なので、この境界で静的分割:
+#   vlm : GPU 0-3（96GB）ollama :11434
+#   sim : GPU 4-7（96GB）ollama :11435
+# submit で group に `any` を書くと、空き VRAM の多い方へ振り分ける。
+#
+# 【ollama 起動の注意（2026-09-06 の実測）】CUDA_VISIBLE_DEVICES は CUDA にしか効かず、
+# Vulkan バックエンドは独自に GPU を列挙して**分割の外側へモデルを載せる**
+# （qwen3.8:27b が vlm 群の GPU2 に載り 76% CPU 退避した）。
+# serve には必ず OLLAMA_VULKAN=0 GGML_VK_VISIBLE_DEVICES="" を併記する。`gpujob serve` が正しく立てる。
+#
+# 使い方:
+#   gpujob submit <vlm|sim|any> <name> [--need-gb N] [--exclusive] -- <command...>
+#   gpujob worker <vlm|sim>        # キュー消化（setsid nohup で常駐）
+#   gpujob serve  <vlm|sim>        # そのグループの ollama serve を正しい環境変数で起動
+#   gpujob status [group]
+#   gpujob logs <name> [-f]
+#   gpujob cancel <name>
+#   gpujob env <group>
+set -u
+
+ROOT="${GPUJOB_HOME:-$HOME/.local/share/gpujobs}"
+JOB_GROUPS="vlm sim"
+MAX_SHARED="${GPUJOB_MAX_SHARED:-3}"
+OLLAMA_BIN="$HOME/.local/ollama/bin/ollama"
+
+group_gpus(){ case "$1" in vlm) echo "0,1,2,3";; sim) echo "4,5,6,7";; *) return 1;; esac; }
+group_port(){ case "$1" in vlm) echo 11434;; sim) echo 11435;; *) return 1;; esac; }
+valid_group(){ group_gpus "$1" >/dev/null 2>&1; }
+ensure_dirs(){ for g in $JOB_GROUPS; do mkdir -p "$ROOT/$g"/{queue,running,done,logs}; done; }
+now(){ date '+%Y-%m-%d %H:%M:%S'; }
+
+group_free_mib(){
+  local gpus; gpus=$(group_gpus "$1") || return 1
+  local total=0 i f
+  for i in ${gpus//,/ }; do
+    f=$(nvidia-smi --id="$i" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
+    [ -n "$f" ] && total=$((total + f))
+  done
+  echo "$total"
+}
+
+# 自分以外のユーザーがそのグループの GPU を使っていたら名前を返す（→ 新規ジョブを止めて譲る）
+foreign_gpu_users(){
+  local gpus; gpus=$(group_gpus "$1") || return 1
+  local me; me=$(id -un)
+  local i pid owner out=""
+  for i in ${gpus//,/ }; do
+    for pid in $(nvidia-smi --id="$i" --query-compute-apps=pid --format=csv,noheader 2>/dev/null); do
+      owner=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')
+      [ -n "$owner" ] && [ "$owner" != "$me" ] && out="$out $owner"
+    done
+  done
+  echo "$out" | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd, -
+}
+
+release_idle_models(){
+  local port; port=$(group_port "$1") || return 0
+  local m
+  for m in $(OLLAMA_HOST="127.0.0.1:$port" "$OLLAMA_BIN" ps 2>/dev/null | awk 'NR>1{print $1}'); do
+    OLLAMA_HOST="127.0.0.1:$port" "$OLLAMA_BIN" stop "$m" >/dev/null 2>&1
+  done
+}
+
+usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# ---------------------------------------------------------------- submit
+cmd_submit(){
+  local group="$1"; shift
+  local name="$1"; shift
+  local need_gb=0 mode=shared
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --need-gb) need_gb="$2"; shift 2;;
+      --exclusive) mode=exclusive; shift;;
+      --) shift; break;;
+      *) break;;
+    esac
+  done
+  [ $# -gt 0 ] || { echo "コマンドが空。'--' の後に実行内容を書くこと" >&2; exit 2; }
+  ensure_dirs
+  if [ "$group" = "any" ]; then
+    # 空き VRAM が多く、待機が少ない方へ
+    local best="" bestscore=-999999 g free q score
+    for g in $JOB_GROUPS; do
+      free=$(group_free_mib "$g"); q=$(ls -1 "$ROOT/$g/queue" 2>/dev/null | wc -l)
+      score=$((free - q * 1024))
+      [ "$score" -gt "$bestscore" ] && { best="$g"; bestscore=$score; }
+    done
+    group="$best"
+  fi
+  valid_group "$group" || { echo "不明なグループ: $group（$JOB_GROUPS | any）" >&2; exit 2; }
+  local ts job
+  ts=$(date '+%Y%m%d-%H%M%S')
+  job="$ROOT/$group/queue/${ts}_${name}.job"
+  {
+    echo "#!/usr/bin/env bash"
+    echo "# name=$name group=$group mode=$mode need_gb=$need_gb submitted=$(now)"
+    echo "NEED_GB=$need_gb"
+    echo "MODE=$mode"
+    echo "JOB_NAME=$name"
+    printf '%q ' "$@"
+    echo
+  } > "$job"
+  chmod +x "$job"
+  echo "submitted[$mode]: $name → $group（GPU $(group_gpus "$group")、need ${need_gb}GB）"
+}
+
+# ---------------------------------------------------------------- worker
+# 完了した子を回収する: 実行ラッパが running/NAME.rc に終了コードを書く
+reap(){
+  local group="$1" rcf base rc
+  for rcf in "$ROOT/$group/running"/*.rc; do
+    [ -e "$rcf" ] || continue
+    base=$(basename "${rcf%.rc}")
+    rc=$(cat "$rcf" 2>/dev/null || echo '?')
+    mv "$ROOT/$group/running/$base.job" "$ROOT/$group/done/$base.rc$rc" 2>/dev/null
+    rm -f "$rcf" "$ROOT/$group/running/$base.pid"
+    echo "[$(now)] DONE $base rc=$rc"
+  done
+}
+
+# VRAM 検査。足りなければ待つ（最大 GPUJOB_MAX_WAIT_S、既定60分）→ それでも駄目なら skip。
+# 戻り値: 0=進んでよい / 1=このループは見送り（待機中） / 2=skip 済み
+vram_gate(){
+  local group="$1" base="$2" need_gb="$3"
+  [ "${need_gb:-0}" -gt 0 ] || return 0
+  local free_mib; free_mib=$(group_free_mib "$group")
+  if [ "$free_mib" -ge $((need_gb * 1024)) ]; then
+    rm -f "$ROOT/$group/.wait_$base" 2>/dev/null
+    return 0
+  fi
+  local waitkey="$ROOT/$group/.wait_$base" waited=0
+  [ -f "$waitkey" ] && waited=$(cat "$waitkey" 2>/dev/null || echo 0)
+  if [ "$waited" -lt "${GPUJOB_MAX_WAIT_S:-3600}" ]; then
+    echo $((waited + 30)) > "$waitkey"
+    [ $((waited % 300)) -eq 0 ] && echo "[$(now)] WAIT $base: 要求 ${need_gb}GB > 空き $((free_mib/1024))GB"
+    return 1
+  fi
+  echo "[$(now)] SKIP $base: 要求 ${need_gb}GB が $((waited/60)) 分空かなかった"
+  rm -f "$waitkey"
+  mv "$ROOT/$group/queue/$base.job" "$ROOT/$group/done/$base.skipped"
+  return 2
+}
+
+launch(){  # $1=group $2=base $3=mode
+  local group="$1" base="$2" mode="$3"
+  local lock="$ROOT/$group/.lock" logf="$ROOT/$group/logs/$base.log"
+  mv "$ROOT/$group/queue/$base.job" "$ROOT/$group/running/$base.job"
+  local flag="-s"; [ "$mode" = "exclusive" ] && flag="-x"
+  echo "[$(now)] RUN[$mode] $base → $logf"
+  (
+    flock $flag 9
+    export CUDA_VISIBLE_DEVICES="$(group_gpus "$group")"
+    export OLLAMA_HOST="127.0.0.1:$(group_port "$group")"
+    export GPUJOB_GROUP="$group"
+    export GPUJOB_OLLAMA_URL="http://127.0.0.1:$(group_port "$group")"
+    bash "$ROOT/$group/running/$base.job" > "$logf" 2>&1
+    echo $? > "$ROOT/$group/running/$base.rc"
+  ) 9>"$lock" &
+  echo $! > "$ROOT/$group/running/$base.pid"
+}
+
+cmd_worker(){
+  local group="$1"
+  valid_group "$group" || { echo "不明なグループ: $group" >&2; exit 2; }
+  ensure_dirs
+  local idle_polls=0
+  echo "[$(now)] worker v2 開始: group=$group GPU=$(group_gpus "$group") port=$(group_port "$group") max_shared=$MAX_SHARED"
+  while :; do
+    reap "$group"
+    local nrun job base mode need_gb
+    nrun=$(ls -1 "$ROOT/$group/running"/*.job 2>/dev/null | wc -l)
+    job=$(ls -1 "$ROOT/$group/queue"/*.job 2>/dev/null | head -1)
+
+    if [ -z "$job" ]; then
+      if [ "$nrun" -eq 0 ]; then
+        idle_polls=$((idle_polls + 1))
+        [ "$idle_polls" -eq 4 ] && { release_idle_models "$group"; echo "[$(now)] idle: モデルをアンロードして VRAM を返した"; }
+      fi
+      sleep 15; continue
+    fi
+    idle_polls=0
+    base=$(basename "${job%.job}")
+    mode=$(grep -m1 '^MODE=' "$job" | cut -d= -f2-); mode=${mode:-shared}
+    need_gb=$(grep -m1 '^NEED_GB=' "$job" | cut -d= -f2-)
+
+    # 他ユーザーが居たら新規は出さない（実行中のものは完走させる）
+    local foreign; foreign=$(foreign_gpu_users "$group")
+    if [ -n "$foreign" ]; then
+      echo "[$(now)] YIELD: 他ユーザー($foreign)が使用中。新規ジョブを止めて譲る"
+      [ "$nrun" -eq 0 ] && release_idle_models "$group"
+      sleep 120; continue
+    fi
+
+    if [ "$mode" = "exclusive" ]; then
+      # 排他: 走行中が全部はけるのを待ってから単独で。flock -x が下りるまで新規は出さない
+      if [ "$nrun" -gt 0 ]; then sleep 10; continue; fi
+      vram_gate "$group" "$base" "$need_gb"; case $? in 1) sleep 30; continue;; 2) continue;; esac
+      launch "$group" "$base" exclusive
+      wait "$(cat "$ROOT/$group/running/$base.pid" 2>/dev/null)" 2>/dev/null
+      continue
+    fi
+
+    # shared: 上限まで並走
+    if [ "$nrun" -ge "$MAX_SHARED" ]; then sleep 10; continue; fi
+    vram_gate "$group" "$base" "$need_gb"; case $? in 1) sleep 30; continue;; 2) continue;; esac
+    launch "$group" "$base" shared
+    sleep 2
+  done
+}
+
+# ---------------------------------------------------------------- serve
+cmd_serve(){
+  local group="$1"
+  valid_group "$group" || { echo "不明なグループ: $group" >&2; exit 2; }
+  local port; port=$(group_port "$group")
+  if curl -sf -m 2 "http://127.0.0.1:$port/api/version" >/dev/null 2>&1; then
+    echo "既に稼働中: :$port"; return 0
+  fi
+  # Vulkan を必ず切る。CUDA_VISIBLE_DEVICES は Vulkan に効かず、分割の外へ載る（実測）。
+  CUDA_VISIBLE_DEVICES="$(group_gpus "$group")" \
+  OLLAMA_VULKAN=0 GGML_VK_VISIBLE_DEVICES="" \
+  OLLAMA_HOST="127.0.0.1:$port" \
+  OLLAMA_MODELS="$HOME/.local/ollama/models" \
+  OLLAMA_NUM_PARALLEL="${GPUJOB_NUM_PARALLEL:-8}" \
+  OLLAMA_KEEP_ALIVE="${GPUJOB_KEEP_ALIVE:-20m}" \
+  setsid nohup "$OLLAMA_BIN" serve > "/tmp/ollama_$group.log" 2>&1 < /dev/null &
+  sleep 8
+  local ncuda nvk
+  ncuda=$(grep -oE "CUDA[0-9]+ " "/tmp/ollama_$group.log" | sort -u | wc -l)
+  nvk=$(grep -oE "Vulkan[0-9]+ " "/tmp/ollama_$group.log" | sort -u | wc -l)
+  echo "起動: :$port CUDAデバイス=$ncuda Vulkan=$nvk（CUDA=4・Vulkan=0 が正常）"
+  [ "$nvk" -gt 0 ] && echo "!! Vulkan が生きている。分割が破れるので設定を見直すこと"
+}
+
+# ---------------------------------------------------------------- misc
+cmd_status(){
+  ensure_dirs
+  local only="${1:-}"
+  for g in $JOB_GROUPS; do
+    [ -n "$only" ] && [ "$only" != "$g" ] && continue
+    local gpus port free worker srv
+    gpus=$(group_gpus "$g"); port=$(group_port "$g"); free=$(group_free_mib "$g")
+    worker="停止"; pgrep -f "gpujob worker $g" >/dev/null && worker="稼働"
+    srv="停止"; curl -sf -m 2 "http://127.0.0.1:$port/api/version" >/dev/null 2>&1 && srv="稼働"
+    echo "== group=$g GPU=$gpus 空き$((free/1024))GB worker:$worker ollama:$port:$srv max_shared=$MAX_SHARED"
+    local f
+    for f in "$ROOT/$g/running"/*.job; do
+      [ -e "$f" ] || continue
+      local b m; b=$(basename "${f%.job}"); m=$(grep -m1 '^MODE=' "$f" | cut -d= -f2-)
+      echo "   [RUN:${m:-shared}] $b"
+    done
+    ls -1 "$ROOT/$g/queue" 2>/dev/null | head -10 | sed 's/^/   [WAIT] /'
+    ls -1t "$ROOT/$g/done" 2>/dev/null | head -5 | sed 's/^/   [DONE] /'
+  done
+}
+
+cmd_logs(){
+  local name="$1"; shift || true
+  local f; f=$(ls -1t "$ROOT"/*/logs/*"$name"*.log 2>/dev/null | head -1)
+  [ -n "$f" ] || { echo "ログが見つからない: $name" >&2; exit 1; }
+  if [ "${1:-}" = "-f" ]; then tail -f "$f"; else cat "$f"; fi
+}
+
+cmd_cancel(){
+  local name="$1" f n=0
+  for f in "$ROOT"/*/queue/*"$name"*.job; do
+    [ -e "$f" ] || continue
+    mv "$f" "$(dirname "$(dirname "$f")")/done/$(basename "${f%.job}").cancelled"
+    n=$((n+1))
+  done
+  echo "cancelled: $n 件（実行中は対象外。必要なら running/*.pid を kill）"
+}
+
+cmd_env(){
+  local g="$1"
+  valid_group "$g" || { echo "不明なグループ: $g" >&2; exit 2; }
+  echo "export CUDA_VISIBLE_DEVICES=$(group_gpus "$g")"
+  echo "export OLLAMA_HOST=127.0.0.1:$(group_port "$g")"
+  echo "export GPUJOB_OLLAMA_URL=http://127.0.0.1:$(group_port "$g")"
+}
+
+case "${1:-}" in
+  submit) shift; cmd_submit "$@";;
+  worker) shift; cmd_worker "$@";;
+  serve)  shift; cmd_serve "$@";;
+  status) shift; cmd_status "${1:-}";;
+  logs)   shift; cmd_logs "$@";;
+  cancel) shift; cmd_cancel "$@";;
+  env)    shift; cmd_env "$@";;
+  ""|-h|--help) usage 0;;
+  *) echo "不明なサブコマンド: $1" >&2; usage 2;;
+esac
