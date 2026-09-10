@@ -64,6 +64,33 @@ export const PLAN_NOTES = Object.freeze({
    * （計画 §5 の vlm-watch アーム）の判断材料が実験ログから失われる。
    */
   DOUBLES_BACK: 'plan doubles back (waypoints not ordered by distance)',
+  /** 機動アーム: 選択肢の外を選んだ（hold へ落とす） */
+  UNKNOWN_MANEUVER: 'maneuver outside the allowed set',
+  /** 機動アーム: 状況図に居ない track を指した */
+  UNKNOWN_TRACK: 'target track not in the picture',
+  /** 機動アーム: track の書き方が違ったので正規化して対応づけた（例 "01" → "TRK-01"） */
+  TARGET_NORMALISED: 'target track matched after normalising the reference',
+  /** 機動アーム: 相手を特定できなかったので最も近い接触を採った */
+  TARGET_NEAREST: 'target unresolved; used the nearest contact',
+  /** 機動アーム: 相手が1隻しか居ないので推定した */
+  TARGET_INFERRED: 'target inferred (only one contact)',
+  /** 機動アーム: 避けると言ったが相手を特定できない（hold へ落とす） */
+  NO_TARGET: 'avoidance maneuver without a target',
+  /** 機動アーム: offset を範囲へクランプした */
+  OFFSET_CLAMPED: 'offset clamped to the allowed range',
+  /** 生成したプランが接触に近すぎた（H6 の事後検査）。**作り直しても解消しなかった場合だけ残る** */
+  CLEARANCE_SHORT: 'generated plan passes closer than the offset',
+  /** 離隔が足りなかったので offset を広げて作り直した */
+  OFFSET_WIDENED: 'offset widened and the plan regenerated',
+  /** 目的地までの残り距離に対して迂回が大きすぎたので offset を詰めた（A1-(1)） */
+  OFFSET_ROOM_CAPPED: 'offset capped by the room left to the destination',
+  /**
+   * 予測 CPA が既に要求離隔を満たしているので、回避せず現行プランを維持した（A2）。
+   * 2026-09-06 の実測: モデルは 75 回の判断のうち `hold` を **3 回**しか選ばず、
+   * レーダーに点が見えれば距離に関係なく避けようとした（経路長比 1.77・到達 3/6）。
+   * 「避ける必要があるか」は CPA の算術で決まるので、コード側で判定する。
+   */
+  CPA_ALREADY_CLEAR: 'contact will pass clear by itself; no avoidance needed',
 });
 
 function clamp(v, lo, hi) {
@@ -200,4 +227,125 @@ export function samePlan(a, b, toleranceM = 1) {
   return a.every(
     (p, i) => Math.abs(p.eastM - b[i].eastM) <= toleranceM && Math.abs(p.northM - b[i].northM) <= toleranceM
   );
+}
+
+/**
+ * track の指し方を正規化して対応づける。
+ *
+ * 【なぜ要るか】2026-09-06 の実測で、モデルは `watch` 文では正しく「TRK-01 is close and on the
+ * port side」と書きながら、`targetTrack` フィールドには **`"01"` と数字だけ**を入れてきた。
+ * 厳密一致で弾くと「相手を特定できない」として `hold` に落ち、**watch アームが実質無効化された**
+ * （6エピソード中4本で1度も回避しなかった）。
+ * モデルは正しい情報を持っているのに書式が違うだけなので、**受ける側が寄せる**のが正しい。
+ * 寛容にした事実は notes に残す（黙って直すと、書式が崩れていることに気付けなくなる）。
+ *
+ * @param {string} ref - モデルが書いた文字列
+ * @param {string[]} knownIds - 状況図に居る track の id
+ * @returns {{id:string|null, normalised:boolean}}
+ */
+export function resolveTrackRef(ref, knownIds) {
+  if (typeof ref !== 'string' || ref.trim() === '') return { id: null, normalised: false };
+  const raw = ref.trim();
+  if (knownIds.includes(raw)) return { id: raw, normalised: false };
+
+  const squash = (v) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = squash(raw);
+  // 大小・区切りの違いだけ（"trk 01" / "trk-01" / "TRK01"）
+  const bySquash = knownIds.filter((id) => squash(id) === target);
+  if (bySquash.length === 1) return { id: bySquash[0], normalised: true };
+
+  // 末尾の数字だけを書いてきた（"01" / "1"）。数値として一致するものを探す
+  const num = /(\d+)\s*$/.exec(raw);
+  if (num) {
+    const want = Number(num[1]);
+    const byNumber = knownIds.filter((id) => {
+      const m = /(\d+)\s*$/.exec(id);
+      return m && Number(m[1]) === want;
+    });
+    if (byNumber.length === 1) return { id: byNumber[0], normalised: true };
+  }
+  return { id: null, normalised: false };
+}
+
+/**
+ * 機動選択アーム（`vlm-watch`）の応答をパースする。
+ *
+ * 座標が1つも出てこないので、`parseNavigatorPlan` が守っていた退化（書き写し・順序逆転・
+ * 自船位置の混入）は**構造的に起こり得ない**。ここで守るのは「選択肢の外を選ぶ」ことだけである。
+ *
+ * @param {string} text
+ * @param {{picture:object, maneuvers:string[], offsetRange:{min:number,max:number,dflt:number}}} ctx
+ * @returns {{maneuver:string, targetTrack:string|null, offsetM:number, watch:string|null,
+ *   speed:string|null, notes:string[], parsed:object|null}}
+ */
+export function parseNavigatorManeuver(text, { picture, maneuvers, offsetRange }) {
+  if (!picture?.self) throw new TypeError('parseNavigatorManeuver: picture is required');
+  const notes = [];
+  const json = extractFirstJsonObject(typeof text === 'string' ? text : '');
+  let parsed = null;
+  if (json !== null) {
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return {
+      maneuver: 'hold',
+      targetTrack: null,
+      offsetM: offsetRange.dflt,
+      watch: null,
+      speed: null,
+      notes: [PLAN_NOTES.UNPARSABLE],
+      parsed: null,
+    };
+  }
+
+  const watch = toWatch(parsed.watch);
+  const speed = toSpeed(parsed.speed);
+
+  // 選択肢の外は hold へ落とす（勝手に近いものへ寄せない——何を選んだかが分からなくなる）
+  let maneuver = typeof parsed.maneuver === 'string' ? parsed.maneuver.trim() : '';
+  if (!maneuvers.includes(maneuver)) {
+    if (maneuver !== '') notes.push(PLAN_NOTES.UNKNOWN_MANEUVER);
+    maneuver = 'hold';
+  }
+
+  // 相手は状況図に居る track だけ。書き方の違いは正規化して寄せ、寄せたことを残す
+  const contacts = picture.radar?.contacts ?? [];
+  const knownIds = contacts.map((c) => c.id);
+  const resolved = resolveTrackRef(parsed.targetTrack, knownIds);
+  let targetTrack = resolved.id;
+  if (resolved.normalised) notes.push(PLAN_NOTES.TARGET_NORMALISED);
+  else if (typeof parsed.targetTrack === 'string' && parsed.targetTrack.trim() !== '' && targetTrack === null) {
+    notes.push(PLAN_NOTES.UNKNOWN_TRACK);
+  }
+
+  // 避けると言いながら相手を指せなかった場合。
+  // **hold へ落とさない**——モデルは「危険があり、どちら側を通るか」まで表明できているので、
+  // 特定できないという理由で何もしないのは表明された意図を捨てることになる
+  // （実測でこれが起き、6エピソード中4本で1度も回避しなかった）。
+  // 相手の同定はモデルが苦手な部分で、最も近い接触を採るのはコード側が決定論的にできる判断である。
+  if (targetTrack === null && (maneuver === 'pass_port' || maneuver === 'pass_starboard')) {
+    if (knownIds.length === 1) {
+      targetTrack = knownIds[0];
+      notes.push(PLAN_NOTES.TARGET_INFERRED);
+    } else if (knownIds.length > 1) {
+      const nearest = contacts.reduce((a, b) => (b.rangeM < a.rangeM ? b : a));
+      targetTrack = nearest.id;
+      notes.push(PLAN_NOTES.TARGET_NEAREST);
+    } else {
+      notes.push(PLAN_NOTES.NO_TARGET);
+      maneuver = 'hold';
+    }
+  }
+
+  let offsetM = toFiniteNumber(parsed.offsetM ?? parsed.offset_m);
+  if (offsetM === null) offsetM = offsetRange.dflt;
+  const clamped = Math.min(Math.max(offsetM, offsetRange.min), offsetRange.max);
+  if (clamped !== offsetM) notes.push(PLAN_NOTES.OFFSET_CLAMPED);
+  offsetM = clamped;
+
+  return { maneuver, targetTrack, offsetM, watch, speed, notes, parsed };
 }

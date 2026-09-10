@@ -43,13 +43,20 @@
     }
     #canvas-2d, #canvas-3d { display: block; width: 100%; height: 100%; background: #0e1b1f; }
 
-    #conv-pane { flex: 0 0 340px; display: flex; flex-direction: column; background: #0a161d; }
+    #conv-pane { flex: 0 0 360px; display: flex; flex-direction: column; background: #0a161d; }
+    #conv-detail-toggle {
+      position: absolute; top: 8px; right: 10px; z-index: 2; font-size: 10.5px; color: #6fb3c7;
+      display: flex; align-items: center; gap: 4px; cursor: pointer;
+    }
     #conv-entries {
       flex: 1; overflow-y: auto; padding: 30px 10px 10px; font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
       white-space: pre-wrap; word-break: break-word;
     }
     #conv-entries > div { padding: 2px 4px; border-radius: 3px; }
     #conv-entries > div:hover { background: #122234; }
+    .conv-window { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #16283c; }
+    .conv-override { padding-left: 14px; opacity: 0.95; }
+    .conv-obey-summary { padding-left: 14px; opacity: 0.55; font-size: 10.5px; }
 
     #empty-hint {
       position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -76,6 +83,7 @@
       </label>
       <button id="btn-load-default" title="サーバー経由（npx serve等）で開いている場合のみ動作します">既定ログを読込</button>
       <select id="episode-select" disabled><option>エピソード未読み込み</option></select>
+      <select id="focus-select" disabled title="3Dカメラが後ろから追従する艇"><option>追従艇未選択</option></select>
       <span id="status"></span>
     </div>
 
@@ -104,6 +112,7 @@
       </div>
       <div class="pane" id="conv-pane">
         <div class="pane-label">指揮官・艇AIの判断ログ</div>
+        <label id="conv-detail-toggle"><input type="checkbox" id="conv-detail-checkbox" /> 詳細（全ログ）を表示</label>
         <div id="conv-entries"></div>
       </div>
       <div id="empty-hint">

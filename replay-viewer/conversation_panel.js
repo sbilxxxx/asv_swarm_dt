@@ -81,3 +81,59 @@ export function renderConversation(container, events, untilT, onSeek) {
     };
   }
 }
+
+const FACTION_LABEL = { defender: '守備側', intruder: '攻撃側' };
+const FACTION_ICON = { defender: '🔵', intruder: '🔴' };
+
+function renderWindow(w) {
+  const box = document.createElement('div');
+  box.className = 'conv-window';
+
+  const head = line(
+    `[t=${w.t.toFixed(1)}] ${FACTION_ICON[w.faction] ?? ''} ${FACTION_LABEL[w.faction] ?? w.faction}指揮官「${w.intent ?? '(意図なし)'}」`,
+    COLOR.orders,
+    { bold: true, t: w.t }
+  );
+  box.appendChild(head);
+
+  for (const o of w.overrides) {
+    const el = line(`└ ${o.boatId} が独自判断: 「${o.reason ?? '(理由なし)'}」`, COLOR.boatOverride, { t: o.t });
+    el.className = 'conv-override';
+    box.appendChild(el);
+  }
+
+  if (w.obeyCount > 0) {
+    const el = line(`（他 ${w.obeyCount}隻は指揮官の指示に従った）`, COLOR.boatObey);
+    el.className = 'conv-obey-summary';
+    box.appendChild(el);
+  }
+
+  return box;
+}
+
+/**
+ * 「指揮官の意図単位」に構造化した表示（既定表示）。buildConversationWindows()の出力を使う。
+ * @param {HTMLElement} container
+ * @param {Array} windows buildConversationWindows()の戻り値
+ * @param {Array<{t:number,kind:string}>} extraEvents episode開始/決着など、ウィンドウ化しない単発イベント
+ * @param {number} untilT
+ * @param {(t:number)=>void} [onSeek]
+ */
+export function renderStructuredConversation(container, windows, extraEvents, untilT, onSeek) {
+  container.textContent = '';
+  const items = [
+    ...windows.map((w) => ({ t: w.t, render: () => renderWindow(w) })),
+    ...extraEvents.map((ev) => ({ t: ev.t, render: () => renderEvent(ev) })),
+  ]
+    .filter((it) => it.t <= untilT)
+    .sort((a, b) => b.t - a.t); // 新しいものを上に
+
+  for (const it of items) container.appendChild(it.render());
+
+  if (onSeek) {
+    container.onclick = (e) => {
+      const t = e.target?.dataset?.seekT;
+      if (t !== undefined) onSeek(Number(t));
+    };
+  }
+}

@@ -51,7 +51,17 @@
  *   --episode N        エピソード番号（既定 1）。**同じ番号は必ず同じ軌跡**になり、
  *                      違う番号では初期針路（±25度）と交通船の位相（±60m）が
  *                      決定論的に振れる（R1。乱数は使わない）
- *   --cycles N         最大判断サイクル数。既定 12
+ *   --cycles auto|N    判断サイクル数。**既定 auto**（実行過程を見て伸縮する。下記）
+ *                      数値を書くと従来どおりの固定上限になる
+ *   --max-cycles N     auto のときの天井。既定 40
+ *   --stall-cycles K   残距離が縮まないサイクルが K 回続いたら打ち切る。既定 6
+ *   --stall-progress M 「縮まった」と見なす最小の改善量（m）。既定 5
+ *                      （回避中は残距離が縮まないのが正常なので、厳しくすると回避を罰する）
+ *   --widen-factor F   離隔不足のとき offset を広げる倍率。既定 1.6（1.0 で無効）
+ *   --widen-max N      広げ直す回数。既定 2（0 で無効）
+ *   --room-fraction F  目的地までの残距離に対する offset の上限比。**既定 0.35**（0 で無効）。
+ *                      残り98mの地点で307mの迂回を打って復帰できなくなる事象を防ぐ
+ *   --arrival-aware    プロンプトに「迂回は距離のコスト」の1行を入れる。**既定は入れない**
  *   --interval S       判断間隔（シム秒）。既定 10
  *   --render S         render ステージの宣言値（シム秒）。既定 0.1
  *   --infer S          infer ステージの宣言値（シム秒）。既定 2.0
@@ -146,7 +156,18 @@ function parseArgs(argv) {
     url: 'http://localhost:11434/v1',
     transport: 'openai',
     thinking: 'auto',
-    cycles: 12,
+    cycles: 'auto',
+    maxCycles: 40,
+    // 停滞判定は「回避中は残距離が縮まないのが正常」を踏まえて緩める。
+    // 20m×4サイクル（=40シム秒）は厳しすぎ、回避そのものを罰していた（実測: ep6 が
+    // scripted の到達と同じ8サイクルで打ち切られた）。5m×6サイクル（=60シム秒）にする。
+    stallCycles: 6,
+    stallProgressM: 5,
+    // 既定は実測で最良だった構成。つまみは ablation 用に残す（core 側のコメント参照）
+    widenFactor: 1.6,
+    widenMax: 2,
+    roomFraction: 0.35,
+    arrivalAware: false,
     intervalS: 10,
     renderS: 0.1,
     inferS: 2.0,
@@ -172,7 +193,17 @@ function parseArgs(argv) {
     else if (a === '--url') o.url = argv[++i];
     else if (a === '--transport') o.transport = argv[++i];
     else if (a === '--thinking') o.thinking = argv[++i];
-    else if (a === '--cycles') o.cycles = Number(argv[++i]);
+    else if (a === '--cycles') {
+      const v = argv[++i];
+      o.cycles = v === 'auto' ? 'auto' : Number(v);
+    } else if (a === '--max-cycles') o.maxCycles = Number(argv[++i]);
+    else if (a === '--stall-cycles') o.stallCycles = Number(argv[++i]);
+    else if (a === '--stall-progress') o.stallProgressM = Number(argv[++i]);
+    else if (a === '--widen-factor') o.widenFactor = Number(argv[++i]);
+    else if (a === '--widen-max') o.widenMax = Number(argv[++i]);
+    else if (a === '--room-fraction') o.roomFraction = Number(argv[++i]);
+    else if (a === '--arrival-aware') o.arrivalAware = true;
+    else if (a === '--no-arrival-aware') o.arrivalAware = false;
     else if (a === '--interval') o.intervalS = Number(argv[++i]);
     else if (a === '--render') o.renderS = Number(argv[++i]);
     else if (a === '--infer') o.inferS = Number(argv[++i]);
@@ -202,6 +233,11 @@ function parseArgs(argv) {
   if (!['openai', 'ollama'].includes(o.transport)) throw new Error(`--transport は openai|ollama: ${o.transport}`);
   if (!['auto', 'on', 'off'].includes(o.thinking)) throw new Error(`--thinking は auto|on|off: ${o.thinking}`);
   if (!Number.isInteger(o.episode) || o.episode < 1) throw new Error(`--episode は1以上の整数: ${o.episode}`);
+  if (o.cycles !== 'auto' && (!Number.isInteger(o.cycles) || o.cycles < 1)) {
+    throw new Error(`--cycles は auto または1以上の整数: ${o.cycles}`);
+  }
+  if (!Number.isInteger(o.maxCycles) || o.maxCycles < 1) throw new Error(`--max-cycles は1以上の整数`);
+  if (!Number.isInteger(o.stallCycles) || o.stallCycles < 1) throw new Error(`--stall-cycles は1以上の整数`);
   // Ollama ネイティブは /api/chat に居る。/v1 付きの既定URLをそのまま渡すと 404 になるので直す
   if (o.transport === 'ollama') o.url = o.url.replace(/\/v1\/?$/, '');
   if (o.renderS + o.inferS >= o.intervalS) {
@@ -283,9 +319,10 @@ const INSTALL_NAV = ({ arrivalM, destination, withImage, res, variation }) => `
     }
   }
   three.updateShips(world.state.snapshot(), world.clock);
-  const [picMod, planMod] = await Promise.all([
+  const [picMod, planMod, fuseMod] = await Promise.all([
     import('/core/sim/navigator/navigator_picture.js'),
     import('/core/sim/navigator/plan_follower.js'),
+    import('/core/sim/navigator/fuse_tracks.js'),
   ]);
   const heroId = window.__debug.heroId ?? world.state.id[0];
   const ARRIVAL_M = ${arrivalM};
@@ -305,7 +342,7 @@ const INSTALL_NAV = ({ arrivalM, destination, withImage, res, variation }) => `
   }
 
   const plan = new planMod.RoutePlan({ destination: dest, arrivalM: ARRIVAL_M });
-  const trackNamer = new picMod.TrackNamer();   // H0: 接触idの匿名化
+  const trackStore = new fuseMod.TrackStore();  // H0 匿名化 ＋ H3 相手の速度推定
   if (${withImage ? 'true' : 'false'}) world.sensors.camera.captureSize = { w: ${res.w}, h: ${res.h} };
 
   const trail = [];
@@ -341,7 +378,7 @@ const INSTALL_NAV = ({ arrivalM, destination, withImage, res, variation }) => `
         plan: plan.snapshot(),
         arrivalM: ARRIVAL_M,
         image,
-        trackNamer,
+        trackStore,
       });
       return { picture: pic, renderMs, arrived, pathLengthM };
     },
@@ -526,6 +563,10 @@ async function main() {
           transport: opts.transport,
           thinking: opts.thinking,
           mode: opts.arm === 'vlm-watch' ? 'watch' : 'plan',
+          widenFactor: opts.widenFactor,
+          widenMax: opts.widenMax,
+          roomFraction: opts.roomFraction,
+          arrivalAware: opts.arrivalAware,
           numCtx: declaredNumCtx,
           onCall: (record) => {
             lastCall = record;
@@ -562,7 +603,32 @@ async function main() {
   let arrived = false;
   let minContactSeenM = Infinity;
 
-  for (let cycle = 0; cycle < opts.cycles && !arrived; cycle++) {
+  /**
+   * サイクル上限を実行過程に応じて伸縮させる（A1-(2)）。
+   *
+   * 【なぜ固定では駄目か】2026-09-06 の実測で、離隔を最大化した結果 6エピソード中2本が
+   * 14サイクルの固定上限に達して未到達だった。片方は残り 74m（あと1〜2サイクルで着く）、
+   * もう片方は残り 232m（本当に迷走）——**同じ「未到達」の中身がまるで違うのに、
+   * 固定上限では区別できない。**
+   *
+   * 【伸ばす条件と切る条件】
+   *   伸ばす: 目的地までの残距離が縮み続けている限り、天井（--max-cycles）まで続ける
+   *   切る  : 残距離が --stall-progress ぶんも縮まないサイクルが --stall-cycles 回続いたら
+   *           打ち切る（迷走している。続けても着かない）
+   *
+   * 【決定論を壊さない】判定材料は**シム上の量（残距離）だけ**で、実時間は一切見ない。
+   * 同じエピソード番号なら同じサイクル数で同じ理由で止まる。
+   * これは「どこまで観測するか」という実行器の設定であって、シムのルールではない
+   * （docs/time-model.md の遅延の出所には触れない）。
+   */
+  const isAuto = opts.cycles === 'auto';
+  const ceiling = isAuto ? opts.maxCycles : opts.cycles;
+  let bestRemainingM = Infinity;
+  let stalledFor = 0;
+  /** @type {'arrived'|'stalled'|'ceiling'|'fixed-limit'} */
+  let stopReason = 'ceiling';
+
+  for (let cycle = 0; cycle < ceiling && !arrived; cycle++) {
     const snap = await page.evaluate('window.__vlmNav.picture()');
     const picture = snap.picture;
     if (withImage && !picture.imageDataUrl) throw new Error('camera sensor returned no image');
@@ -624,6 +690,20 @@ async function main() {
       trafficCount: after.trafficCount,
       arrived: after.arrived,
     };
+    // 残距離の改善を見る。改善があれば停滞カウンタを戻し、無ければ数える
+    const remainingM = Math.hypot(
+      setup.dest.eastM - after.pose.eastM,
+      setup.dest.northM - after.pose.northM
+    );
+    if (remainingM < bestRemainingM - opts.stallProgressM) {
+      bestRemainingM = remainingM;
+      stalledFor = 0;
+    } else {
+      stalledFor += 1;
+    }
+    row.remainingM = remainingM;
+    row.stalledFor = stalledFor;
+
     cycleRows.push(row);
     decisionLog.write(JSON.stringify(row) + '\n');
 
@@ -645,8 +725,23 @@ async function main() {
         `\n      action: ${decision.action}${decision.resentSamePlan ? ' (same plan resent)' : ''}  plan: ${wpStr}` +
         (decision.notes.length ? `  notes: ${decision.notes.join('; ')}` : '') +
         `\n      -> after ${opts.intervalS}s: (${after.pose.eastM.toFixed(0)},${after.pose.northM.toFixed(0)})` +
+        `  残り ${remainingM.toFixed(0)}m${stalledFor > 0 ? ` (停滞 ${stalledFor})` : ''}` +
         `${after.arrived ? '  ARRIVED' : ''}`
     );
+
+    if (after.arrived) {
+      stopReason = 'arrived';
+      break;
+    }
+    if (isAuto && stalledFor >= opts.stallCycles) {
+      stopReason = 'stalled';
+      console.log(
+        `\n[nav] 打ち切り: 残距離が ${opts.stallProgressM}m 以上縮まないサイクルが ` +
+          `${stalledFor} 回続いた（最良 ${bestRemainingM.toFixed(0)}m）。迷走していると判断`
+      );
+      break;
+    }
+    if (cycle + 1 >= ceiling) stopReason = isAuto ? 'ceiling' : 'fixed-limit';
   }
 
   // 俯瞰1枚と軌跡
@@ -673,6 +768,10 @@ async function main() {
     contextTight: stats.contextTight ?? 0,
     declared: { intervalS: opts.intervalS, renderS: opts.renderS, inferS: opts.inferS, latencyS },
     cycles: cycleRows.length,
+    cycleBudget: isAuto ? { mode: 'auto', ceiling, stallCycles: opts.stallCycles, stallProgressM: opts.stallProgressM } : { mode: 'fixed', limit: ceiling },
+    stopReason,
+    bestRemainingM: Number.isFinite(bestRemainingM) ? bestRemainingM : null,
+    tuning: { widenFactor: opts.widenFactor, widenMax: opts.widenMax, roomFraction: opts.roomFraction, arrivalAware: opts.arrivalAware },
     arrived,
     directDistanceM,
     pathLengthM: last?.pathLengthM ?? 0,
@@ -689,6 +788,8 @@ async function main() {
     droppedByReason: stats.droppedByReason ?? {},
     byManeuver: stats.byManeuver ?? null,
     clearanceShort: stats.clearanceShort ?? 0,
+    /** モデルが回避したがったが CPA 的に不要だった回数（A2）。過剰反応の度合いがここに出る */
+    avoidanceUnneeded: stats.avoidanceUnneeded ?? 0,
     byOutcome: stats.byOutcome ?? {},
     totalOutputTokens: stats.totalOutputTokens ?? 0,
     measured: {
@@ -701,7 +802,12 @@ async function main() {
 
   console.log('\n================ episode summary ================');
   console.log(`arm / scenario      ${summary.arm} / ${summary.scenario}${summary.model ? ' / ' + summary.model : ''}`);
-  console.log(`arrived             ${summary.arrived}  (${summary.cycles} cycles, ${summary.simSecondsElapsed.toFixed(0)} sim s)`);
+  console.log(
+    `arrived             ${summary.arrived}  (${summary.cycles} cycles / ${summary.cycleBudget.mode}` +
+      `${summary.cycleBudget.mode === 'auto' ? ` 上限${summary.cycleBudget.ceiling}` : ''}, ` +
+      `${summary.simSecondsElapsed.toFixed(0)} sim s, 停止理由 ${summary.stopReason}` +
+      `${summary.bestRemainingM != null ? `, 最良残距離 ${summary.bestRemainingM.toFixed(0)}m` : ''})`
+  );
   console.log(`direct / path       ${summary.directDistanceM.toFixed(0)} m / ${summary.pathLengthM.toFixed(0)} m  ratio ${summary.pathRatio ? summary.pathRatio.toFixed(2) : '-'}`);
   console.log(
     `traffic             ${summary.trafficCount} 隻   最接近 ${summary.minTrafficM != null ? summary.minTrafficM.toFixed(0) + ' m' : '-'}`
@@ -723,7 +829,7 @@ async function main() {
   if (summary.byManeuver) {
     console.log(
       `maneuvers           ${Object.entries(summary.byManeuver).filter(([, v]) => v > 0).map(([k, v]) => `${k}×${v}`).join(', ') || '-'}` +
-        `   離隔不足 ${summary.clearanceShort}`
+        `   離隔不足 ${summary.clearanceShort}   不要な回避を見送り ${summary.avoidanceUnneeded}`
     );
   }
   console.log(

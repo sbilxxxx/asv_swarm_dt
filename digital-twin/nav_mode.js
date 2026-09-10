@@ -24,6 +24,7 @@
 
 import { DecisionScheduler } from '../core/sim/command/decision_scheduler.js';
 import { buildNavigatorPicture, DEFAULT_ARRIVAL_RADIUS_M } from '../core/sim/navigator/navigator_picture.js';
+import { TrackStore } from '../core/sim/navigator/fuse_tracks.js';
 import { RoutePlan, applyPlanOrder } from '../core/sim/navigator/plan_follower.js';
 import { createVlmNavigatorFn, scriptedNavigator } from '../core/sim/navigator/vlm_navigator.js';
 
@@ -67,12 +68,14 @@ export const NAV_DEFAULTS = Object.freeze({
   timeScale: 1,
 });
 
-const ARMS = ['vlm', 'blind', 'scripted'];
+const ARMS = ['vlm', 'vlm-watch', 'blind', 'scripted'];
 
 /**
  * URL クエリから航行モードの設定を読む。`?nav=` が無ければ null（＝従来どおりの表示のみ）。
  *
- * ?nav=vlm|blind|scripted  アーム。blind は同じプロンプトで画像だけ無し（統制群）
+ * ?nav=vlm|vlm-watch|blind|scripted
+ *                           アーム。vlm-watch は VLM に機動だけ選ばせ waypoint はコードが生成（H2）。
+ *                           blind は同じプロンプトで画像だけ無し（統制群）
  * ?model=NAME              モデル名
  * ?vlmurl=URL              推論サーバ（既定 /vlm/v1 ＝同一オリジンのプロキシ）
  * ?transport=openai|ollama 推論サーバへの経路。既定 openai。thinking 系VLM（qwen3-vl 等）で
@@ -160,10 +163,13 @@ export function createNavigatorMode({
   overlay = null,
 }) {
   const { arm, intervalS, renderS, inferS, arrivalM } = options;
-  const withImage = arm === 'vlm';
+  const withImage = arm === 'vlm' || arm === 'vlm-watch';
   const latencyS = renderS + inferS;
 
   const plan = new RoutePlan({ destination, arrivalM });
+  // 接触の表示名を匿名化する。シナリオの id（例 traffic-cross）をそのまま見せると、
+  // モデルが名前を読むだけで正解できてしまい測定が無意味になる（H0）
+  const trackStore = new TrackStore();
   const scheduler = new DecisionScheduler();
   // 複数ステージ宣言の最初の実使用者。latencyS は併記しない（併記は設定ミスとして落ちる仕様）
   scheduler.register(boatId, {
@@ -197,6 +203,7 @@ export function createNavigatorMode({
           timeoutMs: options.timeoutMs,
           transport: options.transport,
           thinking: options.thinking,
+          mode: arm === 'vlm-watch' ? 'watch' : 'plan',
           onCall: (record) => {
             records.push(record);
             if (records.length > MAX_RECORDS) records.shift();
@@ -268,6 +275,7 @@ export function createNavigatorMode({
         plan: plan.snapshot(),
         arrivalM,
         image,
+        trackStore,
       });
       const token = scheduler.markIssued(id, t);
       Promise.resolve(decide(picture)).then(

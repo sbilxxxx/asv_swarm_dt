@@ -14,12 +14,16 @@
 import { loadSceneFromScenario } from '../core/data/adapters/index.js';
 import { createProjection, drawMap, drawProtectedAsset } from '../swarm-sim/map_view.js';
 import { drawAgents } from '../swarm-sim/agent_view.js';
-import { loadPositionLog, loadDecisionLog, loadCallLog, entitiesAt, buildConversationEvents } from './log_loader.js';
-import { renderConversation } from './conversation_panel.js';
+import {
+  loadPositionLog, loadDecisionLog, loadCallLog, entitiesAt,
+  buildConversationEvents, buildConversationWindows,
+} from './log_loader.js';
+import { renderConversation, renderStructuredConversation } from './conversation_panel.js';
 
 const el = (id) => document.getElementById(id);
 const fileInputs = { positions: el('file-positions'), decisions: el('file-decisions'), calls: el('file-calls') };
 const episodeSelect = el('episode-select');
+const focusSelect = el('focus-select');
 const btnLoadDefault = el('btn-load-default');
 const btnPlayPause = el('btn-playpause');
 const speedSelect = el('speed-select');
@@ -31,6 +35,15 @@ const emptyHint = el('empty-hint');
 const canvas2d = el('canvas-2d');
 const canvas3d = el('canvas-3d');
 const convEntries = el('conv-entries');
+const convDetailCheckbox = el('conv-detail-checkbox');
+
+/** 3人称チェイスカメラのパラメータ（艇の後方・やや上から、進行方向へ視線を向ける） */
+const CHASE_BEHIND_M = 20;
+const CHASE_HEIGHT_M = 7;
+const CHASE_LOOKAHEAD_M = 25;
+const CHASE_SMOOTH = 0.12; // 1に近いほど追従が速い（値が小さいほど滑らか）
+
+const FACTION_LABEL = { defender: '守備側', intruder: '攻撃側' };
 
 /** 既定で試すログ一式（submission/measurements配下。サーバー経由で開いた場合だけfetchできる） */
 const DEFAULT_LOG_BASE = '../submission/measurements/qwen2.5-32b/';
@@ -54,7 +67,7 @@ let threeModulePromise = null;
 function loadThreeSceneBuilder() {
   if (!threeModulePromise) {
     threeModulePromise = import('../digital-twin/scene_builder.js')
-      .then((mod) => mod.buildThreeScene)
+      .then((mod) => ({ buildThreeScene: mod.buildThreeScene, SHIP_DECK_HEIGHT: mod.SHIP_DECK_HEIGHT }))
       .catch((err) => {
         console.error('3Dシーンビルダーの読み込みに失敗:', err);
         return null;
@@ -149,15 +162,17 @@ async function selectEpisode(episodeIndex) {
     : null;
 
   let three = null;
-  const buildThreeScene = await loadThreeSceneBuilder();
-  if (!buildThreeScene) {
+  let shipDeckHeight = 0.5;
+  const threeMod = await loadThreeSceneBuilder();
+  if (!threeMod) {
     show3dMessage(
       '3D表示は利用できません。Three.jsの読み込み元（unpkg.com）にブラウザから到達できないネットワーク環境のようです。\n' +
       '2D俯瞰マップ・判断ログはそのまま利用できます。'
     );
   } else {
     try {
-      three = buildThreeScene(canvas3d, scene, { focus, focusEntityId: scenario.spawns[0]?.id ?? null });
+      three = threeMod.buildThreeScene(canvas3d, scene, { focus, focusEntityId: scenario.spawns[0]?.id ?? null });
+      shipDeckHeight = threeMod.SHIP_DECK_HEIGHT ?? shipDeckHeight;
       show3dMessage(null);
     } catch (err) {
       console.error('3Dシーンの構築に失敗:', err);
@@ -165,14 +180,34 @@ async function selectEpisode(episodeIndex) {
     }
   }
 
+  // 追従艇セレクタ（3人称チェイスカメラの対象）。既定は先頭スポーン（従来のfocusEntityIdと同じ）
+  focusSelect.innerHTML = '';
+  for (const s of scenario.spawns) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = `${s.id}（${FACTION_LABEL[s.faction] ?? s.faction}）`;
+    focusSelect.appendChild(opt);
+  }
+  focusSelect.disabled = false;
+  const defaultFocusId = scenario.spawns[0]?.id ?? null;
+  focusSelect.value = defaultFocusId;
+
   const decisions = decisionsByEpisode.get(episodeIndex) ?? [];
   const calls = callsByEpisode.get(episodeIndex) ?? [];
   const events = buildConversationEvents(decisions, calls);
-  events.unshift({ t: 0, kind: 'system', text: `episode ${ep.episode} 開始 — scenario=${scenario.name}, blue=${ep.meta?.blue ?? '?'} (${ep.meta?.model ?? ''}), red=${ep.meta?.red ?? '?'}` });
-  if (ep.outcome) events.push({ t: ep.tEnd, kind: 'mission', outcome: ep.outcome });
+  const windows = buildConversationWindows(decisions, calls);
+  const startEvent = { t: 0, kind: 'system', text: `episode ${ep.episode} 開始 — scenario=${scenario.name}, blue=${ep.meta?.blue ?? '?'} (${ep.meta?.model ?? ''}), red=${ep.meta?.red ?? '?'}` };
+  events.unshift(startEvent);
+  const extraEvents = [startEvent];
+  if (ep.outcome) {
+    const missionEv = { t: ep.tEnd, kind: 'mission', outcome: ep.outcome };
+    events.push(missionEv);
+    extraEvents.push(missionEv);
+  }
 
   current = {
-    ep, scene, three, project, shipClassById, protectedAsset, events,
+    ep, scene, three, shipDeckHeight, project, shipClassById, protectedAsset,
+    events, windows, extraEvents, focusBoatId: defaultFocusId, camSmooth: null,
     t: 0, tEnd: Math.max(ep.tEnd, 0.1), playing: false, lastFrameMs: null,
   };
 
@@ -196,6 +231,87 @@ function entitiesForCurrent(T) {
   return raw.map((r) => ({ ...r, shipClass: current.shipClassById.get(r.id) ?? r.shipClass }));
 }
 
+/**
+ * 選択中の艇の3人称チェイスカメラ位置を計算する。
+ * シム座標は x=東/y=北、heading=東を0とする反時計回り。Three.js側はx=東/z=-北なので、
+ * 進行方向ベクトル(cos h, sin h)[sim]は(cos h, -sin h)[world XZ]に対応する
+ * （digital-twin/scene_builder.js の updateShips() コメントと同じ規約）。
+ */
+function chaseCameraPose(entity, shipDeckHeight) {
+  const fx = Math.cos(entity.heading);
+  const fz = -Math.sin(entity.heading);
+  const shipWx = entity.x;
+  const shipWz = -entity.y;
+  return {
+    pos: {
+      x: shipWx - fx * CHASE_BEHIND_M,
+      y: shipDeckHeight + CHASE_HEIGHT_M,
+      z: shipWz - fz * CHASE_BEHIND_M,
+    },
+    look: {
+      x: shipWx + fx * CHASE_LOOKAHEAD_M,
+      y: shipDeckHeight + 1.5,
+      z: shipWz + fz * CHASE_LOOKAHEAD_M,
+    },
+  };
+}
+
+function lerp3(a, b, t) {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+}
+
+/** 現在時刻Tにおける各陣営指揮官の「今アクティブな意図」（直近に発効した指示）を返す */
+function activeIntentByFaction(T) {
+  const out = {};
+  for (const w of current.windows) {
+    if (w.t <= T) out[w.faction] = w;
+  }
+  return out;
+}
+
+function drawIntentOverlay(ctx2d, T) {
+  const active = activeIntentByFaction(T);
+  const pad = 10;
+  const boxW = Math.min(280, canvas2d.width / 2 - 2 * pad);
+  const drawBox = (w, faction, alignRight) => {
+    if (!w) return;
+    const color = faction === 'defender' ? '#4fb8d6' : '#e0708e';
+    const label = `${FACTION_LABEL[faction]}指揮官: 「${w.intent ?? '(意図なし)'}」`;
+    ctx2d.font = '11px system-ui';
+    const lines = wrapText(ctx2d, label, boxW - 16);
+    const boxH = 8 + lines.length * 14 + 6;
+    const x = alignRight ? canvas2d.width - boxW - pad : pad;
+    const y = pad + 22; // pane-labelの下
+    ctx2d.save();
+    ctx2d.fillStyle = 'rgba(6,18,26,0.82)';
+    ctx2d.strokeStyle = color;
+    ctx2d.lineWidth = 1.5;
+    ctx2d.fillRect(x, y, boxW, boxH);
+    ctx2d.strokeRect(x, y, boxW, boxH);
+    ctx2d.fillStyle = color;
+    lines.forEach((l, i) => ctx2d.fillText(l, x + 8, y + 16 + i * 14));
+    ctx2d.restore();
+  };
+  drawBox(active.defender, 'defender', false);
+  drawBox(active.intruder, 'intruder', true);
+}
+
+function wrapText(ctx2d, text, maxWidth) {
+  const words = text.split('');
+  const lines = [];
+  let cur = '';
+  for (const ch of words) {
+    if (ctx2d.measureText(cur + ch).width > maxWidth && cur) {
+      lines.push(cur);
+      cur = ch;
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.slice(0, 4);
+}
+
 function renderFrame(T, dtSeconds = 0) {
   if (!current) return;
   const entities = entitiesForCurrent(T);
@@ -205,11 +321,21 @@ function renderFrame(T, dtSeconds = 0) {
   drawMap(ctx2d, canvas2d, current.scene, current.project);
   drawProtectedAsset(ctx2d, canvas2d, current.scene, current.project, current.protectedAsset);
   drawAgents(ctx2d, entities, current.project);
+  drawIntentOverlay(ctx2d, T);
 
   // 3D（Three.jsのCDN読み込みに失敗した環境ではcurrent.threeがnullのままなのでスキップする）
   if (current.three) {
     current.three.updateShips(entities, T);
-    current.three.updateOverviewCamera(dtSeconds);
+    const focusEntity = entities.find((e) => e.id === current.focusBoatId);
+    if (focusEntity) {
+      const target = chaseCameraPose(focusEntity, current.shipDeckHeight);
+      current.camSmooth = current.camSmooth
+        ? { pos: lerp3(current.camSmooth.pos, target.pos, CHASE_SMOOTH), look: lerp3(current.camSmooth.look, target.look, CHASE_SMOOTH) }
+        : target; // 初回・追従艇切り替え直後はスナップ
+      const cam = current.three.overviewCamera;
+      cam.position.set(current.camSmooth.pos.x, current.camSmooth.pos.y, current.camSmooth.pos.z);
+      cam.lookAt(current.camSmooth.look.x, current.camSmooth.look.y, current.camSmooth.look.z);
+    }
     current.three.render(T);
   }
 
@@ -224,12 +350,17 @@ function renderFrame(T, dtSeconds = 0) {
     outcomeBadge.textContent = '';
   }
 
-  renderConversation(convEntries, current.events, T, (seekT) => {
+  const onSeek = (seekT) => {
     current.t = seekT;
     current.playing = false;
     btnPlayPause.textContent = '▶ 再生';
     renderFrame(seekT);
-  });
+  };
+  if (convDetailCheckbox.checked) {
+    renderConversation(convEntries, current.events, T, onSeek);
+  } else {
+    renderStructuredConversation(convEntries, current.windows, current.extraEvents, T, onSeek);
+  }
 }
 
 function tick(nowMs) {
@@ -267,6 +398,17 @@ seek.addEventListener('input', () => {
 episodeSelect.addEventListener('change', () => {
   const idx = Number(episodeSelect.value);
   if (Number.isFinite(idx)) selectEpisode(idx);
+});
+
+focusSelect.addEventListener('change', () => {
+  if (!current) return;
+  current.focusBoatId = focusSelect.value;
+  current.camSmooth = null; // 追従先が変わった瞬間はスナップし、古い艇からゆっくり流れるのを防ぐ
+  renderFrame(current.t);
+});
+
+convDetailCheckbox.addEventListener('change', () => {
+  if (current) renderFrame(current.t);
 });
 
 async function processLoadedText(positionsText, decisionsText, callsText) {

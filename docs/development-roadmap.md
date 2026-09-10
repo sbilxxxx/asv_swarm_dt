@@ -35,6 +35,8 @@
 >
 > | # | やること | 前提・メモ |
 > |---|---|---|
+> 個別のTODOと1イテレーションの手順は [`vlm-system-and-worklist.md`](vlm-system-and-worklist.md) §4・§5 が正典。
+>
 > | T-1 | **マルチVLMエージェント試験** — 複数の艇に同時に VLM を持たせて走らせる | 収容設計は [`multi-vlm-gpu-budget.md`](multi-vlm-gpu-budget.md) に整理済み（`num_ctx` を絞れば32B×8スロットが2基で収まる）。**単艦の航路計画が成立してから**——現状 VLM は危険を報告しても回避を計画できていない（[`perception-to-waypoint-flow.md`](perception-to-waypoint-flow.md)）ので、それを N 体並べても壊れ方が N 倍になるだけである。32B VLM の実測も未取得 |
 > | T-2 | 知覚〜計画のフロー改修 H0〜H6 | [`perception-to-waypoint-flow.md`](perception-to-waypoint-flow.md) §4。**H0（接触idの匿名化）が最優先**——`traffic-cross` という名前が答えを漏らしており、直さないと以降の測定を信用できない |
 > | T-3 | M2 シナリオ（カメラにしか映らないブイ列） | 「視覚が効いた」を言うために必要。M3（交通船）はレーダーにも映るので分離できない |

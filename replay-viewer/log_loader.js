@@ -180,3 +180,48 @@ export function buildConversationEvents(decisions = [], calls = []) {
   events.sort((a, b) => a.t - b.t);
   return events;
 }
+
+/**
+ * 指令ログ・艇LLM生ログを「指揮官の意図」単位のウィンドウへ構造化する（会話パネルの既定表示）。
+ *
+ * buildConversationEvents()のフラットな時系列（数十〜100件超）は、艇の「obey（指揮官に従う＝
+ * 何も変えない）」が大半を占め、本質的な情報（指揮官が何を考え、どの艇が独自判断で逸脱したか）が
+ * 埋もれる。ここでは陣営ごとに「指揮官の指示が発効してから次の発効まで」を1ウィンドウとし、
+ * その中で艇が override（独自判断）したものだけを子として残す。obeyは件数だけ要約する。
+ *
+ * @param {Array<object>} decisions
+ * @param {Array<object>} calls
+ * @returns {Array<{t:number, faction:string, decider:string, intent:string|null, count:number,
+ *   overrides:Array<{t:number, boatId:string, reason:string|null}>, obeyCount:number}>}
+ */
+export function buildConversationWindows(decisions = [], calls = []) {
+  const windows = [];
+  const boatCalls = calls.filter((c) => c.boatId);
+
+  for (const faction of ['defender', 'intruder']) {
+    const commanderOrders = decisions
+      .filter((d) => d.faction === faction && d.decider?.endsWith('-commander') && d.outcome === 'applied' && d.orders > 0)
+      .sort((a, b) => a.tAppliedS - b.tAppliedS);
+    const factionBoatCalls = boatCalls.filter((c) => c.faction === faction);
+
+    for (let i = 0; i < commanderOrders.length; i++) {
+      const start = commanderOrders[i].tAppliedS;
+      const end = i + 1 < commanderOrders.length ? commanderOrders[i + 1].tAppliedS : Infinity;
+      const inWindow = factionBoatCalls.filter((c) => c.t >= start && c.t < end);
+      windows.push({
+        t: start,
+        faction,
+        decider: commanderOrders[i].decider,
+        intent: commanderOrders[i].intent ?? null,
+        count: commanderOrders[i].orders,
+        overrides: inWindow
+          .filter((c) => c.outcome === 'override')
+          .map((c) => ({ t: c.t, boatId: c.boatId, reason: c.reason || null })),
+        obeyCount: inWindow.filter((c) => c.outcome === 'obey').length,
+      });
+    }
+  }
+
+  windows.sort((a, b) => a.t - b.t);
+  return windows;
+}

@@ -44,6 +44,52 @@ function fmt(n) {
 }
 
 /**
+ * レーダー接触に匿名の表示名（TRK-01, TRK-02 …）を割り当てる。
+ *
+ * 【なぜ必要か】シナリオのエンティティ id はそのままでは**答えを漏らす**。
+ * 2026-09-06 の実測プロンプトには `- traffic-cross: range 36 m, ...` と出ており、
+ * モデルは名前を読むだけで「横切る船」だと分かってしまう——画像もレーダーの幾何も見ずに
+ * 正解できるので、「VLM が何を根拠に判断したか」を測れなくなる。
+ * `vlm-multi-agent-plan.md` §3 が指揮官側のトラック id について同じ穴を指摘しており
+ * （「トラック名を読むだけで艦種が分かる」）、単艦側にも同じ穴が空いていた。
+ *
+ * 【初出順に振る】距離順にすると、同じ船の名前が接近・離脱で入れ替わってしまい、
+ * サイクルを跨いだ参照（「さっき言った TRK-01」）が成立しない。
+ * 状態を持つのはこのためで、エピソード開始時に reset() する
+ * （`SplineTraffic` / `BoatController` と同じ作法）。
+ *
+ * 真の id は picture の `trueId` に残す——**プロンプトには出さないが、
+ * 実験ログでは真値と照合できる**必要があるため（消してしまうと正解率が測れない）。
+ */
+export class TrackNamer {
+  constructor({ prefix = 'TRK' } = {}) {
+    this.prefix = prefix;
+    /** @type {Map<string, string>} 真の id -> 表示名 */
+    this.names = new Map();
+  }
+
+  /** エピソード開始時。跨いだ対応を残さない（前エピソードの TRK-01 と混ざる） */
+  reset() {
+    this.names.clear();
+  }
+
+  /** @param {string} trueId @returns {string} 表示名（初出なら発番する） */
+  nameFor(trueId) {
+    const existing = this.names.get(trueId);
+    if (existing) return existing;
+    const label = `${this.prefix}-${String(this.names.size + 1).padStart(2, '0')}`;
+    this.names.set(trueId, label);
+    return label;
+  }
+
+  /** 表示名 → 真の id（実験ログで真値と照合するため） */
+  trueIdOf(label) {
+    for (const [trueId, name] of this.names) if (name === label) return trueId;
+    return null;
+  }
+}
+
+/**
  * 単艦の状況図を作る。**発行時刻のスナップショット**であり、以後世界が進んでも更新しない
  * （docs/time-model.md I3）。
  *
@@ -57,7 +103,26 @@ function fmt(n) {
 export function buildNavigatorPicture(
   world,
   boatId,
-  { destination, plan = [], arrivalM = DEFAULT_ARRIVAL_RADIUS_M, image = null, episode = null } = {}
+  {
+    destination,
+    plan = [],
+    arrivalM = DEFAULT_ARRIVAL_RADIUS_M,
+    image = null,
+    episode = null,
+    /**
+     * 接触の表示名を発番する TrackNamer。省略すると真の id がそのままプロンプトへ出る
+     * （＝答えが漏れる）。実験では必ず渡すこと。省略を許してあるのは、
+     * 既存の呼び出し・テストを壊さないためだけである。
+     */
+    trackNamer = null,
+    /**
+     * トラックストア（`fuse_tracks.js`）。渡すと匿名化に加えて**相手の針路・速力の推定**が
+     * picture に載る。`avoidance.js` は相手が動くことを知らないと避けられない
+     * （実測: 静止扱いのままだと生成プランの離隔不足が6エピソードで21件）。
+     * `trackNamer` より優先される。
+     */
+    trackStore = null,
+  } = {}
 ) {
   const i = world.state.indexOf(boatId);
   if (i < 0) throw new Error(`buildNavigatorPicture: unknown boat "${boatId}"`);
@@ -80,11 +145,30 @@ export function buildNavigatorPicture(
   const destBearingDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
 
   const radar = world.observe(boatId, 'radar');
-  const contacts = (radar?.contacts ?? []).map((c) => {
+  const rawContacts = radar?.contacts ?? [];
+  // トラック化（匿名化＋速度推定）。渡されていなければ従来どおり
+  const fused = trackStore
+    ? trackStore.observe(
+        rawContacts.map((c) => ({
+          id: c.id,
+          eastM: self.eastM + Math.cos(c.bearingRad) * c.rangeM,
+          northM: self.northM + Math.sin(c.bearingRad) * c.rangeM,
+        })),
+        world.clock
+      )
+    : null;
+  const contacts = rawContacts.map((c, idx) => {
     const bearingDeg = (c.bearingRad * 180) / Math.PI;
     const rel = wrapDeg(bearingDeg - self.headingDeg);
+    const track = fused ? fused[idx] : null;
     return {
-      id: c.id,
+      // プロンプトに出るのはこちら（匿名）。ストア/namer 無しのときだけ真の id が出る
+      id: track ? track.id : trackNamer ? trackNamer.nameFor(c.id) : c.id,
+      /** 真の id。**プロンプトには出さない**が、実験ログで真値と照合するために残す */
+      trueId: c.id,
+      /** 推定した相手の針路・速力（レーダーは点しか返さないので有限差分の推定値。null もある） */
+      courseDeg: track ? track.courseDeg : null,
+      speedMps: track ? track.speedMps : null,
       rangeM: c.rangeM,
       relBearingDeg: rel,
       relative: relativeSide(rel),
@@ -160,13 +244,65 @@ export function buildNavigatorSystemPrompt({ intervalS, latencyS }) {
 }
 
 /**
+ * 機動選択アーム（`vlm-watch`）のシステムプロンプト。
+ *
+ * **座標を作らせない。** VLM には「どの相手を・どちら側に見て・どれだけ離して通るか」だけを
+ * 選ばせ、waypoint は `avoidance.js` が CPA から生成する。
+ * 2026-09-06 の実測で、座標を出力させると**危険と報告した相手の座標をそのまま waypoint に
+ * 書き写す**（採用24点中6点）ことが分かったため、その作業自体を取り上げる
+ * （docs/perception-to-waypoint-flow.md §4 の H2）。
+ *
+ * 語彙は船乗りのもの（相手がどちらに見えるか）にしてある。幾何の解釈は avoidance.js が持つ。
+ */
+export function buildWatchSystemPrompt({ intervalS, latencyS, offsetRange, arrivalAware = true }) {
+  if (!Number.isFinite(intervalS) || !Number.isFinite(latencyS)) {
+    throw new TypeError('buildWatchSystemPrompt: intervalS and latencyS are required numbers');
+  }
+  const { min, max, dflt } = offsetRange;
+  return [
+    'You are the lookout of an uncrewed surface vessel (ASV) in coastal water.',
+    'Each cycle you get own-ship state, radar contacts, the destination, the current route plan,',
+    'and (unless stated otherwise) the forward bridge camera image.',
+    'Heading is degrees, 0 = east, counter-clockwise (90 = north).',
+    `You decide every ${intervalS} s, and your decision takes ${latencyS} s to take effect.`,
+    'You do NOT plan coordinates. You only say what to do about what you see;',
+    'the ship computes the route itself.',
+    'Reply with ONE JSON object and nothing else:',
+    '{"watch": "<one line: the hazard you see, or none>",',
+    ' "maneuver": "hold" | "pass_port" | "pass_starboard" | "slow" | "stop",',
+    ' "targetTrack": "<the track id this is about, or empty>",',
+    ` "offsetM": <how far to keep clear, ${min}-${max}, default ${dflt}>,`,
+    ' "speed": "stop" | "slow" | "cruise"}',
+    '"pass_port" means you keep the contact on your PORT side as you pass it;',
+    '"pass_starboard" means you keep it on your STARBOARD side.',
+    'Use "hold" when nothing needs avoiding — that is the normal answer in open water.',
+    // A1-(3): 到達と離隔のトレードオフを明示する。2026-09-06 の実測で、避けることだけを
+    // 求めた結果 6エピソード中2本が経路長比 1.84 で目的地へ着かなかった（避けすぎて着かない）。
+    // 距離の情報は状況図に既にあるが、それが**コストである**ことは言っていなかった。
+    ...(arrivalAware
+      ? [
+          'You must also arrive. A detour costs distance, so choose the SMALLEST offset that',
+          'keeps you clear, and choose "hold" when the contact will pass clear on its own.',
+        ]
+      : []),
+  ].join('\n');
+}
+
+/**
  * 状況図をプロンプト本文へ。
  *
  * @param {ReturnType<typeof buildNavigatorPicture>} picture
- * @param {{expectBoatId?:string|null}} [options] - 艇の取り違えを推論より前に止める
- *   （他艇の視界で判断させると、返る指示は well-formed なまま別の艇のものになる。boat_agent.js と同じ守り）
+ * @param {{expectBoatId?:string|null, withContactCoordinates?:boolean}} [options]
+ *   expectBoatId: 艇の取り違えを推論より前に止める（他艇の視界で判断させると、
+ *     返る指示は well-formed なまま別の艇のものになる。boat_agent.js と同じ守り）
+ *   withContactCoordinates: 接触の絶対座標を書くか。既定 true（実測済みの `vlm-plan` アームの
+ *     プロンプトを1文字も変えないため）。`vlm-watch` アームは座標を必要としないので false にする
+ *     ——**渡さなければ書き写せない**（H1 の仮説をアームの設計として内包する）
  */
-export function renderNavigatorPictureText(picture, { expectBoatId = null } = {}) {
+export function renderNavigatorPictureText(
+  picture,
+  { expectBoatId = null, withContactCoordinates = true } = {}
+) {
   if (expectBoatId !== null && picture?.boatId !== expectBoatId) {
     throw new Error(
       `renderNavigatorPictureText: picture is for "${picture?.boatId}", not "${expectBoatId}"`
@@ -189,8 +325,8 @@ export function renderNavigatorPictureText(picture, { expectBoatId = null } = {}
     lines.push(`Radar (range ${fmt(radar.rangeM)} m):`);
     for (const c of radar.contacts) {
       lines.push(
-        `  - ${c.id}: range ${fmt(c.rangeM)} m, relative bearing ${fmt(c.relBearingDeg)} deg ` +
-          `(${c.relative}), at east=${fmt(c.eastM)}, north=${fmt(c.northM)}`
+        `  - ${c.id}: range ${fmt(c.rangeM)} m, relative bearing ${fmt(c.relBearingDeg)} deg (${c.relative})` +
+          (withContactCoordinates ? `, at east=${fmt(c.eastM)}, north=${fmt(c.northM)}` : '')
       );
     }
   }

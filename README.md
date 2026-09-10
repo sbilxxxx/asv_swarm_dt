@@ -282,6 +282,16 @@ node scripts/serve_vlm.js
 
 `?nav=` を付けなければ従来どおりのセンサー実証表示で、**サーバー不要の静的サイトのまま**である。
 
+### 設計・作業計画のドキュメント
+
+| 主題 | ドキュメント |
+|---|---|
+| **VLM側の全体像・作業TODO・自律反復の手順** | [`docs/vlm-system-and-worklist.md`](docs/vlm-system-and-worklist.md) |
+| 知覚→検知→計画→waypoint のフロー（現状と理想・改修順序） | [`docs/perception-to-waypoint-flow.md`](docs/perception-to-waypoint-flow.md) |
+| GPUメモリと `num_ctx`（マルチVLMの収容設計） | [`docs/multi-vlm-gpu-budget.md`](docs/multi-vlm-gpu-budget.md) |
+| 実装の経緯・実測・残課題 | [`docs/l1-vlm-navigator-implementation-2026-09-05.md`](docs/l1-vlm-navigator-implementation-2026-09-05.md) |
+| リモート閲覧の接続性 | [`docs/remote-viewer-connectivity.md`](docs/remote-viewer-connectivity.md) |
+
 ### GPUクラスタで動かし、手元のブラウザで見る
 
 **接続方式の設計・手順・失敗モードは [`docs/remote-viewer-connectivity.md`](docs/remote-viewer-connectivity.md) が正典。**

@@ -21,9 +21,19 @@
 import { postChatCompletion, LlmHttpError, LLM_HTTP_FAILURES } from '../agents/llm_http.js';
 import {
   buildNavigatorSystemPrompt,
+  buildWatchSystemPrompt,
   renderNavigatorPictureText,
 } from './navigator_picture.js';
-import { parseNavigatorPlan, samePlan } from './parse_plan.js';
+import { parseNavigatorPlan, parseNavigatorManeuver, samePlan, PLAN_NOTES } from './parse_plan.js';
+import {
+  planAvoidance,
+  planClearance,
+  closestPointOfApproach,
+  MANEUVERS,
+  DEFAULT_OFFSET_M,
+  MIN_OFFSET_M,
+  MAX_OFFSET_M,
+} from './avoidance.js';
 import { describeContextUsage, CONTEXT_VERDICTS } from '../agents/context_budget.js';
 
 /** 2026-08-30 の閉ループ実測と同じ既定値。移植で条件を変えないための固定 */
@@ -31,6 +41,16 @@ const DEFAULT_TEMPERATURE = 0.2;
 const DEFAULT_MAX_TOKENS = 400;
 /** 画像1枚ぶんの推論はテキストのみより長い（実測 1.4s → 2.7s）。コールドは20s超 */
 const DEFAULT_TIMEOUT_MS = 60000;
+
+/** 判断の責務の切り方（アーム）。docs/perception-to-waypoint-flow.md §3.3 の構成A */
+export const NAVIGATOR_MODES = Object.freeze({
+  /** VLM が waypoint 座標そのものを作る（現行・実測済み） */
+  PLAN: 'plan',
+  /** VLM は機動を選ぶだけ。waypoint は avoidance.js が CPA から生成する（H2） */
+  WATCH: 'watch',
+});
+
+const OFFSET_RANGE = Object.freeze({ min: MIN_OFFSET_M, max: MAX_OFFSET_M, dflt: DEFAULT_OFFSET_M });
 
 /** 1判断の結末。'replace' 以外はすべて「現行プランを維持」に落ちる */
 export const NAVIGATOR_OUTCOMES = Object.freeze({
@@ -83,15 +103,50 @@ export function createVlmNavigatorFn(options) {
     reasoningEffort,
     fetchImpl = undefined,
     jsonMode = false,
+    /** 'plan'（VLMが座標を作る・既定）か 'watch'（VLMは機動を選ぶだけ）。NAVIGATOR_MODES */
+    mode = NAVIGATOR_MODES.PLAN,
     /**
-     * このモデルに宣言してある num_ctx。**判定にしか使わない**（リクエストでは送らない——
-     * 派生モデルの Modelfire 側で宣言する運用。docs/multi-vlm-gpu-budget.md §2.3）。
-     * 渡すと、応答が返した実測 prompt_tokens と突き合わせて切り捨てを検出する。
+     * A1: 到達と離隔のトレードオフを制御する3つのつまみ。既定値は 2026-09-06 の実測
+     * （離隔は達成したが到達が 6/6→4/6 に退行）を受けて選んだ。**それぞれ独立に切れる**
+     * ようにしてあるのは、どれが効いたのかを1つずつ測れるようにするため。
+     *   widenFactor / widenMax  離隔不足のときに offset を広げる倍率と回数（0回で無効）
+     *   roomFraction            目的地までの残距離に対する offset の上限比（0 で無効）
+     *   arrivalAware            プロンプトに「迂回は距離のコスト」の1行を入れるか
      */
+    /**
+     * 既定値は**実測で最良だった構成**に置く（2026-09-06 の最終測定）。
+     *
+     * | 構成 | median | 最悪 | 経路比 | 到達 |
+     * |---|---:|---:|---:|---:|
+     * | 直行（統制群） | 28.6 m | 10 m | 0.95 | 6/6 |
+     * | watch ＋ CPA veto | 67.9 m | 15 m | 1.23 | 4/6 |
+     * | **watch ＋ CPA veto ＋ roomFraction 0.35** | **83.0 m** | **55 m** | **1.07** | **6/6** |
+     *
+     * `roomFraction` は一度「離隔を損なう」と判定して 0 に戻したが、**その測定は
+     * 永久に航路を塞ぐシナリオ上のもので、天井が「周回する相手のすぐ横をすり抜ける」ために
+     * 使われていた**。シナリオを横断へ直したあとは、本来の役割
+     * （残距離に不釣り合いな迂回を止める）で効いた——離隔不足の広げ直しが
+     * 1.6²=307m まで拡大し、残り98mの地点で307mの迂回を打って復帰できなくなる事象を防ぐ。
+     *
+     * `arrivalAware` は**入れない**。プロンプトに「迂回は距離のコスト」の1行を足した版は
+     * 経路をむしろ長くし（1.26→1.57）、離隔も到達も落とした（ablation 実測）。
+     */
+    widenFactor = 1.6,
+    widenMax = 2,
+    roomFraction = 0.35,
+    arrivalAware = false,
     onCall = null,
   } = options ?? {};
-  /** @type {number|null} 宣言 num_ctx。setNumCtx() で後から入る（判定専用） */
+  /**
+   * このモデルに宣言してある num_ctx。**判定にしか使わない**（リクエストでは送らない——
+   * 派生モデルの Modelfile 側で宣言する運用。docs/multi-vlm-gpu-budget.md §2.3）。
+   * `setNumCtx()` で後から入る。応答が返した実測 prompt_tokens と突き合わせて切り捨てを検出する。
+   * @type {number|null}
+   */
   let numCtx = Number.isFinite(options?.numCtx) ? options.numCtx : null;
+  if (!Object.values(NAVIGATOR_MODES).includes(mode)) {
+    throw new Error(`createVlmNavigatorFn: mode must be 'plan' or 'watch', got ${mode}`);
+  }
   if (!boatId) throw new Error('createVlmNavigatorFn: boatId is required');
   if (!baseUrl) throw new Error('createVlmNavigatorFn: baseUrl is required');
   if (!model) throw new Error('createVlmNavigatorFn: model is required');
@@ -99,7 +154,10 @@ export function createVlmNavigatorFn(options) {
     throw new Error('createVlmNavigatorFn: onCall must be a function or null');
   }
 
-  const systemPrompt = buildNavigatorSystemPrompt({ intervalS, latencyS });
+  const isWatch = mode === NAVIGATOR_MODES.WATCH;
+  const systemPrompt = isWatch
+    ? buildWatchSystemPrompt({ intervalS, latencyS, offsetRange: OFFSET_RANGE, arrivalAware })
+    : buildNavigatorSystemPrompt({ intervalS, latencyS });
 
   const stats = {
     calls: 0,
@@ -120,6 +178,12 @@ export function createVlmNavigatorFn(options) {
     keptPlans: 0,
     withImage: 0,
     withoutImage: 0,
+    /** watch アームのみ: 選んだ機動の内訳。「何を選んだか」の分布がそのまま挙動指標になる */
+    byManeuver: isWatch ? Object.fromEntries(MANEUVERS.map((m) => [m, 0])) : null,
+    /** watch アームのみ: 生成したプランの離隔が offset を満たさなかった回数（H6） */
+    clearanceShort: 0,
+    /** watch アームのみ: モデルが回避したがったが CPA 的に不要だった回数（A2） */
+    avoidanceUnneeded: 0,
     totalLatencyMs: 0,
     totalOutputTokens: 0,
     onCallErrors: 0,
@@ -131,7 +195,11 @@ export function createVlmNavigatorFn(options) {
 
   /** @param {object} picture buildNavigatorPicture の出力 */
   async function decide(picture) {
-    const userPrompt = renderNavigatorPictureText(picture, { expectBoatId: boatId });
+    // watch アームでは接触の絶対座標を渡さない（渡さなければ書き写せない）
+    const userPrompt = renderNavigatorPictureText(picture, {
+      expectBoatId: boatId,
+      withContactCoordinates: !isWatch,
+    });
     const images = picture.imageDataUrl ? [picture.imageDataUrl] : null;
 
     stats.calls += 1;
@@ -181,8 +249,17 @@ export function createVlmNavigatorFn(options) {
 
     let plan = { action: 'keep', waypoints: null, watch: null, speed: null, notes: [], parsed: null };
     let resent = false;
+    let maneuver = null;
     if (raw !== null) {
-      plan = parseNavigatorPlan(raw, { picture });
+      plan = isWatch
+        ? interpretWatch(raw, picture, {
+            horizonS: intervalS + latencyS,
+            widenFactor,
+            widenMax,
+            roomFraction,
+          })
+        : parseNavigatorPlan(raw, { picture });
+      if (isWatch) maneuver = plan.maneuver;
       for (const note of plan.notes) {
         stats.droppedByReason[note] = (stats.droppedByReason[note] ?? 0) + 1;
       }
@@ -203,6 +280,11 @@ export function createVlmNavigatorFn(options) {
     }
     stats.byOutcome[outcome] = (stats.byOutcome[outcome] ?? 0) + 1;
     if (plan.action !== 'replace') stats.keptPlans += 1;
+    if (isWatch && maneuver) {
+      stats.byManeuver[maneuver.name] = (stats.byManeuver[maneuver.name] ?? 0) + 1;
+      if (plan.notes.includes(PLAN_NOTES.CLEARANCE_SHORT)) stats.clearanceShort += 1;
+      if (plan.notes.includes(PLAN_NOTES.CPA_ALREADY_CLEAR)) stats.avoidanceUnneeded += 1;
+    }
 
     const decision = {
       boatId,
@@ -217,6 +299,9 @@ export function createVlmNavigatorFn(options) {
       failure,
       latencyMs,
       hadImage: Boolean(images),
+      mode,
+      /** watch アームで選ばれた機動と相手・離隔（plan アームでは null） */
+      maneuver,
       promptTokens,
       /** num_ctx の妥当性判定（ok / tight / overflow）。overflow はプロンプトの切り捨て＝判断が信用できない */
       context,
@@ -254,6 +339,131 @@ export function createVlmNavigatorFn(options) {
     numCtx = Number.isFinite(value) ? value : null;
   };
   return decide;
+}
+
+/**
+ * watch アームの解釈: 機動の選択 → waypoint の生成 → 事後の離隔検査。
+ *
+ * `parseNavigatorPlan` と同じ形（`{action, waypoints, watch, speed, notes, parsed}`）で返すので、
+ * 呼び出し側（`decide` の統計・`RoutePlan`）は plan アームと区別しなくてよい。
+ * **座標を作るのはここ（コード側）だけ**で、VLM の応答には座標が1つも含まれない。
+ */
+function interpretWatch(raw, picture, { horizonS, widenFactor, widenMax, roomFraction }) {
+  const m = parseNavigatorManeuver(raw, { picture, maneuvers: MANEUVERS, offsetRange: OFFSET_RANGE });
+  const base = {
+    watch: m.watch,
+    speed: m.speed,
+    notes: [...m.notes],
+    parsed: m.parsed,
+    maneuver: { name: m.maneuver, targetTrack: m.targetTrack, offsetM: m.offsetM },
+  };
+  if (m.maneuver === 'hold' || m.maneuver === 'slow' || m.maneuver === 'stop') {
+    return { ...base, action: 'keep', waypoints: null };
+  }
+
+  const target = (picture.radar?.contacts ?? []).find((c) => c.id === m.targetTrack) ?? null;
+  /**
+   * 離隔が足りなければ **offset を広げて作り直す**。
+   *
+   * 2026-09-06 の実測: `planClearance` が「生成プランが offset より近い」と3サイクル連続で
+   * 鳴っていたのに、そのプランをそのまま適用していた（ep2 で最接近 3m）。
+   * VLM の出力なら「落として数える」で正しいが、**これはコード側が作ったプラン**なので、
+   * 検出した幾何の失敗は情報ではなく自分のバグである。決定論的に作り直すのが正しい。
+   * 回数を切ってあるのは、広げ続けても収束しない幾何（両側を挟まれている等）で止めるため。
+   */
+  /**
+   * A1-(1): 目的地までの残距離に対する迂回の上限。
+   * 「離隔だけ」を最大化すると避けすぎて着かない（実測: 到達 6/6→4/6・経路長比 1.84）。
+   * 残り 200m の地点で 300m 横へ出るのは幾何的に到達を捨てているのと同じなので、
+   * **残距離に比例した天井**を掛ける。避けるか進むかの重みづけそのものは
+   * プロンプト側（arrivalAware）とモデルの選択に任せ、ここは幾何の上限だけを守る。
+   */
+  const roomLimitM =
+    roomFraction > 0 && Number.isFinite(picture.destination?.rangeM)
+      ? Math.max(MIN_OFFSET_M, picture.destination.rangeM * roomFraction)
+      : Infinity;
+
+  /**
+   * A2: **そもそも避ける必要があるか**をコード側で判定する。
+   *
+   * 実測（2026-09-06・横断シナリオ）: モデルは 75 回の判断のうち `hold` を **3 回**しか選ばず、
+   * 回避を 66 回選んだ——レーダー範囲（600m）に点が見えれば距離に関係なく避けようとする。
+   * 結果として経路長比 1.77 まで迷走し、到達が 3/6 に落ちた。
+   *
+   * 「その接触は放っておいても離隔を満たすか」は CPA の算術で決まる。
+   * モデルが苦手な算術をコード側が引き取るのは、座標生成を取り上げたのと同じ判断である
+   * （docs/perception-to-waypoint-flow.md §3.2）。**モデルの意図は記録に残す**ので、
+   * 「避けたがったが不要だった」回数は `CPA_ALREADY_CLEAR` として数えられる。
+   */
+  if (target) {
+    const forecast = closestPointOfApproach(
+      picture.self,
+      {
+        eastM: target.eastM,
+        northM: target.northM,
+        ...(Number.isFinite(target.courseDeg) ? { headingDeg: target.courseDeg } : {}),
+        ...(Number.isFinite(target.speedMps) ? { speedMps: target.speedMps } : {}),
+      },
+      { horizonS }
+    );
+    if (forecast.rangeM >= m.offsetM) {
+      base.notes.push(PLAN_NOTES.CPA_ALREADY_CLEAR);
+      return { ...base, action: 'keep', waypoints: null, forecastCpaM: forecast.rangeM };
+    }
+  }
+
+  let generated = null;
+  let usedOffsetM = Math.min(m.offsetM, roomLimitM);
+  if (usedOffsetM < m.offsetM) base.notes.push(PLAN_NOTES.OFFSET_ROOM_CAPPED);
+  for (let attempt = 0; attempt <= widenMax; attempt++) {
+    generated = planAvoidanceOnce(picture, m, target, usedOffsetM, horizonS);
+    if (generated.waypoints.length === 0) break;
+    const c = planClearance({
+      self: picture.self,
+      waypoints: generated.waypoints,
+      contacts: picture.radar?.contacts ?? [],
+    });
+    generated.clearanceM = c.minDistanceM;
+    if (!Number.isFinite(c.minDistanceM) || c.minDistanceM >= usedOffsetM * 0.5) break;
+    if (attempt === widenMax) break;
+    const widened = Math.min(usedOffsetM * widenFactor, MAX_OFFSET_M, roomLimitM);
+    if (widened <= usedOffsetM + 1e-9) break; // 天井に当たっている。これ以上広げても変わらない
+    usedOffsetM = widened;
+    generated.notes.push(PLAN_NOTES.OFFSET_WIDENED);
+  }
+  if (usedOffsetM !== m.offsetM) base.maneuver.offsetM = usedOffsetM;
+  base.notes.push(...generated.notes);
+  if (generated.waypoints.length === 0) return { ...base, action: 'keep', waypoints: null };
+  if (Number.isFinite(generated.clearanceM) && generated.clearanceM < usedOffsetM * 0.5) {
+    base.notes.push(PLAN_NOTES.CLEARANCE_SHORT);
+  }
+  return { ...base, action: 'replace', waypoints: generated.waypoints, clearanceM: generated.clearanceM };
+}
+
+/** 1回ぶんの生成（作り直しループから呼ばれる） */
+function planAvoidanceOnce(picture, m, target, offsetM, horizonS) {
+  const out = planAvoidance({
+    self: picture.self,
+    destination: picture.destination,
+    // レーダーは点しか返さないので相手の針路・速力は不明。avoidance.js が静止として扱う
+    // 相手の針路・速力は fuse_tracks.js の有限差分推定（無ければ null＝静止扱い）。
+    // ここを渡さないと CPA が「相手は止まっている」前提になり、生成した通過点が
+    // 実際には離隔を満たさない（実測: 6エピソードで21件の離隔不足）
+    target: target
+      ? {
+          eastM: target.eastM,
+          northM: target.northM,
+          ...(Number.isFinite(target.courseDeg) ? { headingDeg: target.courseDeg } : {}),
+          ...(Number.isFinite(target.speedMps) ? { speedMps: target.speedMps } : {}),
+        }
+      : null,
+    maneuver: m.maneuver,
+    offsetM,
+    bounds: picture.bounds,
+    // 等速直線の仮定が持つ時間＝このプランが実際に支配する時間だけ先を見る
+    horizonS,
+  });
+  return { ...out, clearanceM: Infinity };
 }
 
 /**
